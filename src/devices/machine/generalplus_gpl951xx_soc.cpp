@@ -396,6 +396,7 @@ void generalplus_gpl951xx_device::device_start()
 	save_item(NAME(m_tft_ctrl));
 	save_item(NAME(m_spifc_rx_fifo));
 	save_item(NAME(m_spifc_rx_read_latch));
+	save_item(NAME(m_io_buffer));
 	save_item(NAME(m_io_dir));
 	save_item(NAME(m_io_attrib));
 	save_item(NAME(m_sys_ctrl));
@@ -453,6 +454,7 @@ void generalplus_gpl951xx_device::device_reset()
 
 	for (int i = 0; i < 6; i++)
 	{
+		m_io_buffer[i] = 0;
 		m_io_dir[i] = 0;
 		m_io_attrib[i] = 0;
 	}
@@ -981,13 +983,21 @@ template<int Port>
 u16 generalplus_gpl951xx_device::io_data_r()
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_data_r\n", machine().describe_context(), 'a' + Port);
-	return m_port_in[Port]();
+	// pins configured as outputs read back the driven level, not the external state
+	// (punirune scans its IR finger sensor by alternating IOB6 between output low
+	//  and input with pull-up, and relies on the driven phase reading back 0)
+	const u16 dir = m_io_dir[Port];
+	const u16 pull = ~dir & ~m_io_attrib[Port];
+	u16 driven = m_io_buffer[Port] & (dir | pull);
+	driven ^= (dir & ~m_io_attrib[Port]);
+	return (m_port_in[Port]() & ~dir) | (driven & dir);
 }
 
 template<int Port>
 void generalplus_gpl951xx_device::io_data_w(u16 data)
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_data_w %04x\n", machine().describe_context(), 'a' + Port, data);
+	m_io_buffer[Port] = data;
 	m_port_out[Port](data);
 }
 
@@ -1002,6 +1012,7 @@ template<int Port>
 void generalplus_gpl951xx_device::io_buffer_w(u16 data)
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_buffer_w %04x\n", machine().describe_context(), 'a' + Port, data);
+	m_io_buffer[Port] = data;
 	m_port_out[Port](data);
 }
 

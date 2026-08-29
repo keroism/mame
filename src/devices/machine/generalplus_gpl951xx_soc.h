@@ -245,6 +245,7 @@ private:
 	u8 m_spifc_rx_fifo[16 * 2];
 	u16 m_spifc_rx_read_latch;
 
+	u16 m_io_buffer[6];
 	u16 m_io_dir[6];
 	u16 m_io_attrib[6];
 

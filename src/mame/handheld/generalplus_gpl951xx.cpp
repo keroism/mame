@@ -27,7 +27,8 @@ public:
 		m_io(*this, "IN%u", 0U),
 		m_adc(*this, "ADC%u", 0U),
 		m_lcdc(*this, "lcdc"),
-		m_st7735(*this, "st7735")
+		m_st7735(*this, "st7735"),
+		m_finger(*this, "FINGER")
 	{
 	}
 
@@ -42,6 +43,9 @@ public:
 	void bftetris(machine_config &config) ATTR_COLD;
 
 	void init_fif() ATTR_COLD;
+
+	int puni_poke_r();
+	int puni_beam_r();
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -74,6 +78,7 @@ protected:
 	required_ioport_array<6> m_adc;
 	required_device<bftetris_lcdc_device> m_lcdc;
 	optional_device<st7735_lcdc_device> m_st7735;
+	optional_ioport m_finger;
 };
 
 u32 generalplus_gpl951xx_game_state::bftetris_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
@@ -99,6 +104,17 @@ u16 generalplus_gpl951xx_game_state::adc_r()
 {
 	u16 data = m_adc[Port]->read();
 	return data;
+}
+
+int generalplus_gpl951xx_game_state::puni_poke_r()
+{
+	return BIT(m_finger->read(), 0);
+}
+
+int generalplus_gpl951xx_game_state::puni_beam_r()
+{
+	// poking necessarily puts the finger through the IR beam as well
+	return (m_finger->read() & 0x03) ? 1 : 0;
 }
 
 void generalplus_gpl951xx_game_state::porta_w(u16 data)
@@ -243,6 +259,18 @@ INPUT_PORTS_END
 
 static INPUT_PORTS_START( puni )
 	PORT_INCLUDE(base)
+
+	PORT_MODIFY("IN1") // d-pad on IOB1-IOB4, finger contact on IOB5, IR optical interrupter on IOB6
+	PORT_BIT( 0x0002, IP_ACTIVE_LOW, IPT_JOYSTICK_UP )
+	PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN )
+	PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT )
+	PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT )
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_poke_r)) // contact closed by the finger pressing down
+	PORT_BIT( 0x0040, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_beam_r)) // phototransistor pulls the pin low unless a finger breaks the beam
+
+	PORT_START("FINGER")
+	PORT_BIT( 0x0001, IP_ACTIVE_HIGH, IPT_BUTTON4 ) PORT_NAME("Poke Finger")
+	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_BUTTON5 ) PORT_NAME("Hover Finger")
 
 	PORT_MODIFY("IN5")
 	PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_BUTTON1 )
