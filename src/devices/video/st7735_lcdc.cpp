@@ -182,7 +182,7 @@ void st7735_lcdc_device::lcdc_data_w(u8 data)
 	}
 	else if (m_command == 0x2c)
 	{
-		m_displaybuffer[((m_posx + (m_posy * 0x400))) & 0x1ffff] = data;
+		m_displaybuffer[((m_posx + (m_posy * 0x400))) & 0x3ffff] = data;
 
 		m_posx++;
 		if (m_posx > ((m_posmaxx << 1) + 1))
@@ -335,7 +335,7 @@ void st7735_lcdc_device::lcdc_data_w(u8 data)
 
 void st7735_lcdc_device::device_start()
 {
-	m_displaybuffer = make_unique_clear<u8 []>(256 * 256 * 2);
+	m_displaybuffer = make_unique_clear<u8 []>(256 * 0x400); // 0x400 bytes (256 pixels) per row, 256 rows
 	m_posx = 0;
 	m_posy = 0;
 	m_posminx = 0;
@@ -347,7 +347,7 @@ void st7735_lcdc_device::device_start()
 	m_displayon = 0;
 	m_sleep = 1;
 
-	save_pointer(NAME(m_displaybuffer), 256 * 256 * 2);
+	save_pointer(NAME(m_displaybuffer), 256 * 0x400);
 	save_item(NAME(m_posx));
 	save_item(NAME(m_posy));
 	save_item(NAME(m_posminx));

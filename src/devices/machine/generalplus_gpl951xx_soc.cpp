@@ -377,6 +377,8 @@ void generalplus_gpl951xx_device::device_start()
 {
 	unsp_20_device::device_start();
 
+	m_tft_bitmap.allocate(320, 240);
+
 	save_item(NAME(m_byteswap));
 	save_item(NAME(m_timer_ctrl));
 	save_item(NAME(m_timer_preload));
@@ -391,6 +393,7 @@ void generalplus_gpl951xx_device::device_start()
 	save_item(NAME(m_bytes_in_spifc_rx_fifo));
 	save_item(NAME(m_spi_bank));
 	save_item(NAME(m_memmode_wcmd));
+	save_item(NAME(m_tft_ctrl));
 	save_item(NAME(m_spifc_rx_fifo));
 	save_item(NAME(m_spifc_rx_read_latch));
 	save_item(NAME(m_io_dir));
@@ -414,8 +417,8 @@ void generalplus_gpl951xx_device::device_start()
 void generalplus_gpl951xx_device::device_reset()
 {
 	unsp_20_device::device_reset();
-	m_spg_video->reset();
 	m_spg_video->set_disallow_resolution_control();
+	m_spg_video->reset();
 
 	m_byteswap = 0;
 
@@ -436,6 +439,7 @@ void generalplus_gpl951xx_device::device_reset()
 	m_bytes_in_spifc_rx_fifo = 0;
 	m_spifc_rx_read_latch = 0;
 	m_memmode_wcmd = 0;
+	m_tft_ctrl = 0;
 	m_spi_bank = 0;
 	m_sys_ctrl = 0;
 	m_clock_ctrl = 0;
@@ -705,13 +709,56 @@ void generalplus_gpl951xx_device::tft_ctrl_w(u16 data)
 	LOGMASKED(LOG_TFT, "%s: tft_ctrl_w %04x (vsa %1x inla %1x ben %1x hcmp %1x dinv %1x cinv %1x hinv %1x vinv %1x mode (%s) clck_s %1x tft_en %1x\n", machine().describe_context(), data,
 		vsu, inla, ben, hcmp, dinv, cinv, hinv, vinv, modenames[mode], clk_s, tften);
 
+	m_tft_ctrl = data;
+
 	if (tften)
 	{
 		if (mode == 0x8)
 			m_i80_cmd_out(m_memmode_wcmd);
 		else if (mode == 0x0a)
 			m_i80_data_out(m_memmode_wcmd);
+		else if (mode == 0x0d) // I80 Single mode - the TFT engine pushes one PPU frame to the panel
+			tft_transfer_frame();
+		// mode 0x0c (I80 Continuous mode) pushes a frame every vblank, see vblank()
 	}
+}
+
+// stream a full PPU-rendered frame out of the I80 interface as RGB565 byte pairs
+// (used by games that let the TFT engine transfer the PPU output to the panel
+//  in memory mode instead of showing the PPU output on an RGB panel directly)
+void generalplus_gpl951xx_device::tft_transfer_frame()
+{
+	const rectangle visarea = m_screen->visible_area();
+
+	m_spg_video->screen_update(*m_screen, m_tft_bitmap, visarea);
+
+	for (int y = visarea.min_y; y <= visarea.max_y; y++)
+	{
+		u32 const *const src = &m_tft_bitmap.pix(y);
+
+		for (int x = visarea.min_x; x <= visarea.max_x; x++)
+		{
+			u32 const pix = src[x];
+			u16 const rgb565 = ((pix & 0xf80000) >> 8) | ((pix & 0x00fc00) >> 5) | ((pix & 0x0000f8) >> 3);
+			m_i80_data_out(rgb565 >> 8);
+			m_i80_data_out(rgb565 & 0xff);
+		}
+	}
+}
+
+void generalplus_gpl951xx_device::vblank(int state)
+{
+	// the vblank signal comes from the TFT controller's timing generator, if the
+	// TFT is disabled there is no video timing, so no new frame interrupts occur
+	// (bubltea disables the TFT and PPU while idle and doesn't acknowledge the
+	//  video IRQ in that state, so would otherwise be flooded with interrupts)
+	if (state && !(m_tft_ctrl & 0x0001))
+		return;
+
+	if (state && ((m_tft_ctrl & 0x00f1) == 0x00c1)) // I80 Continuous mode
+		tft_transfer_frame();
+
+	m_spg_video->vblank(state);
 }
 
 void generalplus_gpl951xx_device::tft_memmode_wcmd_w(u16 data)

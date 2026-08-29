@@ -68,7 +68,7 @@ public:
 
 	IRQ_CALLBACK_MEMBER(irq_vector_cb);
 	u32 screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect) { return m_spg_video->screen_update(screen, bitmap, cliprect); }
-	void vblank(int state) { m_spg_video->vblank(state); }
+	void vblank(int state);
 
 protected:
 	generalplus_gpl951xx_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, u32 clock, address_map_constructor internal);
@@ -115,6 +115,7 @@ private:
 	u16 tft_status_r();
 	void tft_ctrl_w(u16 data);
 	void tft_memmode_wcmd_w(u16 data);
+	void tft_transfer_frame();
 
 	u16 pllsel_r();
 	void pllsel_w(u16 data);
@@ -262,6 +263,8 @@ private:
 	u16 m_spi_bank;
 
 	u16 m_memmode_wcmd;
+	u16 m_tft_ctrl;
+	bitmap_rgb32 m_tft_bitmap;
 
 	u16 m_tft_rgb_ctrl;
 

@@ -8,6 +8,8 @@
 #include "machine/generalplus_gpl951xx_soc.h"
 #include "machine/generic_spi_flash.h"
 
+#include "video/st7735_lcdc.h"
+
 #include "screen.h"
 #include "speaker.h"
 
@@ -24,7 +26,8 @@ public:
 		m_genspi(*this, "spi"),
 		m_io(*this, "IN%u", 0U),
 		m_adc(*this, "ADC%u", 0U),
-		m_lcdc(*this, "lcdc")
+		m_lcdc(*this, "lcdc"),
+		m_st7735(*this, "st7735")
 	{
 	}
 
@@ -47,6 +50,7 @@ protected:
 	void gpl951xx(machine_config &config) ATTR_COLD;
 
 	u32 bftetris_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	u32 st7735_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
 
 	template <u8 Port> u16 port_r();
 	template <u8 Port> u16 adc_r();
@@ -60,17 +64,26 @@ protected:
 	void lcd_i80_cmd(u16 data);
 	void lcd_i80_data(u16 data);
 
+	void st7735_i80_cmd(u16 data);
+	void st7735_i80_data(u16 data);
+
 	required_device<generalplus_gpl951xx_device> m_maincpu;
 	required_device<screen_device> m_screen;
 	required_device<generic_spi_flash_device> m_genspi;
 	required_ioport_array<6> m_io;
 	required_ioport_array<6> m_adc;
 	required_device<bftetris_lcdc_device> m_lcdc;
+	optional_device<st7735_lcdc_device> m_st7735;
 };
 
 u32 generalplus_gpl951xx_game_state::bftetris_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	return m_lcdc->render_to_bitmap(screen, bitmap, cliprect);
+}
+
+u32 generalplus_gpl951xx_game_state::st7735_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+{
+	return m_st7735->render_to_bitmap(screen, bitmap, cliprect);
 }
 
 template <u8 Port>
@@ -235,6 +248,11 @@ static INPUT_PORTS_START( puni )
 	PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_BUTTON1 )
 	PORT_BIT( 0x4000, IP_ACTIVE_LOW, IPT_BUTTON2 )
 	PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_BUTTON3 )
+
+	PORT_MODIFY("ADC5") // battery voltage sense, game locks up on a low battery warning screen if this reads too low
+	PORT_CONFNAME( 0xffff, 0xffff, "Battery Level" )
+	PORT_CONFSETTING(      0xffff, "Full" )
+	PORT_CONFSETTING(      0x0000, "Empty" )
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( segapet1 )
@@ -272,8 +290,10 @@ static INPUT_PORTS_START( bubltea ) // has 3 surface buttons and the straw
 	PORT_BIT( 0x0020, IP_ACTIVE_LOW, IPT_BUTTON3 ) PORT_NAME("Increase Value")
 	PORT_BIT( 0x0040, IP_ACTIVE_LOW, IPT_BUTTON4 ) PORT_NAME("Back")
 
-	PORT_MODIFY("ADC5")
-	PORT_BIT( 0xffff, IP_ACTIVE_LOW, IPT_UNKNOWN )
+	PORT_MODIFY("ADC5") // battery voltage sense? the game refuses to start if this reads full scale or too low
+	PORT_CONFNAME( 0xffff, 0xa000, "Battery Level" )
+	PORT_CONFSETTING(      0xa000, "Normal" )
+	PORT_CONFSETTING(      0x0000, "Empty" )
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( dsgnpal )
@@ -318,6 +338,16 @@ void generalplus_gpl951xx_game_state::lcd_i80_cmd(u16 data)
 void generalplus_gpl951xx_game_state::lcd_i80_data(u16 data)
 {
 	m_lcdc->lcdc_data_w(data);
+}
+
+void generalplus_gpl951xx_game_state::st7735_i80_cmd(u16 data)
+{
+	m_st7735->lcdc_command_w(data);
+}
+
+void generalplus_gpl951xx_game_state::st7735_i80_data(u16 data)
+{
+	m_st7735->lcdc_data_w(data);
 }
 
 
@@ -426,6 +456,13 @@ void generalplus_gpl951xx_game_state::bubltea(machine_config &config)
 	dsgnpal(config);
 	m_screen->set_visarea(0, 128-1, 0, 160-1);
 	m_screen->set_physical_aspect(128, 160);
+
+	// the PPU output is not shown directly, the game only powers up the PPU to
+	// have the TFT controller transfer frames to the panel over the i80 bus
+	ST7735(config, m_st7735);
+	m_maincpu->i80_cmd_out().set(FUNC(generalplus_gpl951xx_game_state::st7735_i80_cmd));
+	m_maincpu->i80_data_out().set(FUNC(generalplus_gpl951xx_game_state::st7735_i80_data));
+	m_screen->set_screen_update(FUNC(generalplus_gpl951xx_game_state::st7735_screen_update));
 }
 
 
