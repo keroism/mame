@@ -46,6 +46,7 @@ public:
 
 	int puni_poke_r();
 	int puni_beam_r();
+	template <unsigned N> int puni_pad_r();
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -108,13 +109,21 @@ u16 generalplus_gpl951xx_game_state::adc_r()
 
 int generalplus_gpl951xx_game_state::puni_poke_r()
 {
-	return BIT(m_finger->read(), 0);
+	// pressing the d-pad also closes the finger contact (the game only
+	// accepts a d-pad wake from sleep if the contact is closed as well)
+	return (m_finger->read() & 0xf1) ? 1 : 0;
 }
 
 int generalplus_gpl951xx_game_state::puni_beam_r()
 {
-	// poking necessarily puts the finger through the IR beam as well
-	return (m_finger->read() & 0x03) ? 1 : 0;
+	// a finger interacting with the d-pad or contact breaks the IR beam too
+	return (m_finger->read() & 0xf3) ? 1 : 0;
+}
+
+template <unsigned N>
+int generalplus_gpl951xx_game_state::puni_pad_r()
+{
+	return BIT(m_finger->read(), 4 + N);
 }
 
 void generalplus_gpl951xx_game_state::porta_w(u16 data)
@@ -261,16 +270,22 @@ static INPUT_PORTS_START( puni )
 	PORT_INCLUDE(base)
 
 	PORT_MODIFY("IN1") // d-pad on IOB1-IOB4, finger contact on IOB5, IR optical interrupter on IOB6
-	PORT_BIT( 0x0002, IP_ACTIVE_LOW, IPT_JOYSTICK_UP )
-	PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN )
-	PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT )
-	PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT )
+	// all six lines are affected by a single finger, so the physical inputs
+	// live on the FINGER port and the port bits are derived from them
+	PORT_BIT( 0x0002, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<0>))
+	PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<1>))
+	PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<2>))
+	PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<3>))
 	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_poke_r)) // contact closed by the finger pressing down
 	PORT_BIT( 0x0040, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_beam_r)) // phototransistor pulls the pin low unless a finger breaks the beam
 
 	PORT_START("FINGER")
 	PORT_BIT( 0x0001, IP_ACTIVE_HIGH, IPT_BUTTON4 ) PORT_NAME("Poke Finger")
 	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_BUTTON5 ) PORT_NAME("Hover Finger")
+	PORT_BIT( 0x0010, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP )
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN )
+	PORT_BIT( 0x0040, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT )
+	PORT_BIT( 0x0080, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT )
 
 	PORT_MODIFY("IN5")
 	PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_BUTTON1 )

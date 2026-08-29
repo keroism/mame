@@ -151,6 +151,17 @@ private:
 	template<int Port> u16 io_mux_r();
 	template<int Port> void io_mux_w(u16 data);
 	template<int Port> u16 io_latch_r();
+
+	u16 key_change_enable1_r();
+	void key_change_enable1_w(u16 data);
+	u16 key_change_enable2_r();
+	void key_change_enable2_w(u16 data);
+	u16 key_change_status1_r();
+	void key_change_status1_w(u16 data);
+	u16 key_change_status2_r();
+	void key_change_status2_w(u16 data);
+	void sample_key_change();
+
 	template<int Port> void io_latch_w(u16 data);
 	template<int Port> u16 io_keyen_r();
 	template<int Port> void io_keyen_w(u16 data);
@@ -248,6 +259,13 @@ private:
 	u16 m_io_buffer[6];
 	u16 m_io_dir[6];
 	u16 m_io_attrib[6];
+	u16 m_io_keyen[6];
+	u16 m_keych_last[6];
+	u16 m_keych_ref[6];
+	u16 m_keych_enable1;
+	u16 m_keych_enable2;
+	u16 m_keych_status1;
+	u16 m_keych_status2;
 
 	u16 m_sys_ctrl;
 	u16 m_clock_ctrl;

@@ -399,6 +399,13 @@ void generalplus_gpl951xx_device::device_start()
 	save_item(NAME(m_io_buffer));
 	save_item(NAME(m_io_dir));
 	save_item(NAME(m_io_attrib));
+	save_item(NAME(m_io_keyen));
+	save_item(NAME(m_keych_last));
+	save_item(NAME(m_keych_ref));
+	save_item(NAME(m_keych_enable1));
+	save_item(NAME(m_keych_enable2));
+	save_item(NAME(m_keych_status1));
+	save_item(NAME(m_keych_status2));
 	save_item(NAME(m_sys_ctrl));
 	save_item(NAME(m_clock_ctrl));
 	save_item(NAME(m_cache_ctrl));
@@ -441,6 +448,10 @@ void generalplus_gpl951xx_device::device_reset()
 	m_spifc_rx_read_latch = 0;
 	m_memmode_wcmd = 0;
 	m_tft_ctrl = 0;
+	m_keych_enable1 = 0;
+	m_keych_enable2 = 0;
+	m_keych_status1 = 0;
+	m_keych_status2 = 0;
 	m_spi_bank = 0;
 	m_sys_ctrl = 0;
 	m_clock_ctrl = 0;
@@ -457,6 +468,9 @@ void generalplus_gpl951xx_device::device_reset()
 		m_io_buffer[i] = 0;
 		m_io_dir[i] = 0;
 		m_io_attrib[i] = 0;
+		m_io_keyen[i] = 0;
+		m_keych_last[i] = 0;
+		m_keych_ref[i] = 0;
 	}
 
 	for (int i = 0; i < 16 * 2; i++)
@@ -750,6 +764,9 @@ void generalplus_gpl951xx_device::tft_transfer_frame()
 
 void generalplus_gpl951xx_device::vblank(int state)
 {
+	if (state)
+		sample_key_change();
+
 	// the vblank signal comes from the TFT controller's timing generator, if the
 	// TFT is disabled there is no video timing, so no new frame interrupts occur
 	// (bubltea disables the TFT and PPU while idle and doesn't acknowledge the
@@ -1074,7 +1091,11 @@ template<int Port>
 u16 generalplus_gpl951xx_device::io_latch_r()
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_latch_r\n", machine().describe_context(), 'a' + Port);
-	return 0xffff;
+	// reading the latch register captures the reference level the key change
+	// detection compares the pins against
+	const u16 cur = m_port_in[Port]();
+	m_keych_ref[Port] = cur;
+	return cur;
 }
 
 template<int Port>
@@ -1087,13 +1108,99 @@ template<int Port>
 u16 generalplus_gpl951xx_device::io_keyen_r()
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_keyen_r\n", machine().describe_context(), 'a' + Port);
-	return 0xffff;
+	return m_io_keyen[Port];
 }
 
 template<int Port>
 void generalplus_gpl951xx_device::io_keyen_w(u16 data)
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_keyen_w %04x\n", machine().describe_context(), 'a' + Port, data);
+	m_io_keyen[Port] = data;
+}
+
+// Key change wake sources (not in the GPL951 datasheet header, but used by the
+// GPL95101 games; enable/status bit layouts inferred from the values written:
+// 78a7/78ab bits 15-8 follow IOB key change enable bits 7-0 (punirune arms the
+// d-pad, 786f = 001e paired with 78a7 = 1e00), 78aa/78ae follow the IOF key
+// change enable directly (788f = 8000 for the button on IOF15, 78aa = 8000).
+// The status registers are write-1-to-clear, the games write back the value
+// they read to acknowledge.
+
+u16 generalplus_gpl951xx_device::key_change_enable1_r()
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_enable1_r\n", machine().describe_context());
+	return m_keych_enable1;
+}
+
+void generalplus_gpl951xx_device::key_change_enable1_w(u16 data)
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_enable1_w %04x\n", machine().describe_context(), data);
+	m_keych_enable1 = data;
+}
+
+u16 generalplus_gpl951xx_device::key_change_enable2_r()
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_enable2_r\n", machine().describe_context());
+	return m_keych_enable2;
+}
+
+void generalplus_gpl951xx_device::key_change_enable2_w(u16 data)
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_enable2_w %04x\n", machine().describe_context(), data);
+	m_keych_enable2 = data;
+}
+
+u16 generalplus_gpl951xx_device::key_change_status1_r()
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_status1_r\n", machine().describe_context());
+	// as long as an enabled pin differs from the reference level the status
+	// keeps asserting; punirune's sleep loop clears the status and re-reads it
+	// within microseconds, an edge-only latch would always be lost
+	const u16 live = (m_port_in[1]() ^ m_keych_ref[1]) & m_io_keyen[1];
+	return m_keych_status1 | ((live & 0x00ff) << 8);
+}
+
+void generalplus_gpl951xx_device::key_change_status1_w(u16 data)
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_status1_w %04x\n", machine().describe_context(), data);
+	m_keych_status1 &= ~data;
+}
+
+u16 generalplus_gpl951xx_device::key_change_status2_r()
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_status2_r\n", machine().describe_context());
+	const u16 live = (m_port_in[5]() ^ m_keych_ref[5]) & m_io_keyen[5];
+	return m_keych_status2 | live;
+}
+
+void generalplus_gpl951xx_device::key_change_status2_w(u16 data)
+{
+	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::key_change_status2_w %04x\n", machine().describe_context(), data);
+	m_keych_status2 &= ~data;
+}
+
+void generalplus_gpl951xx_device::sample_key_change()
+{
+	// sampled once per frame; enough to catch button presses for the sleep wake
+	for (int port = 0; port < 6; port++)
+	{
+		const u16 cur = m_port_in[port]();
+		const u16 diff = (cur ^ m_keych_last[port]) & m_io_keyen[port];
+		m_keych_last[port] = cur;
+
+		if (!diff)
+			continue;
+
+		// the status registers latch changes on any key change enabled pin, the
+		// 78a7/78aa enable registers only gate the wake condition (punirune
+		// briefly disarms them while checking for wake events every sleep
+		// cycle, presses landing in that window must not be lost)
+		if (port == 1) // IOB
+			m_keych_status1 |= (diff & 0x00ff) << 8;
+		else if (port == 5) // IOF
+			m_keych_status2 |= diff;
+		// key change behavior on the other ports is unobserved
+	}
 }
 
 // Misc
@@ -1570,6 +1677,10 @@ void generalplus_gpl951xx_device::gpspi_direct_internal_map(address_map &map)
 	map(0x0078a4, 0x0078a4).rw(FUNC(generalplus_gpl951xx_device::int_priority_2_r), FUNC(generalplus_gpl951xx_device::int_priority_2_w)); // 78a4 - INT_Priority2
 	map(0x0078a5, 0x0078a5).rw(FUNC(generalplus_gpl951xx_device::int_priority_3_r), FUNC(generalplus_gpl951xx_device::int_priority_3_w)); // 78a5 - INT_Priority3
 	map(0x0078a6, 0x0078a6).w(FUNC(generalplus_gpl951xx_device::mint_ctrl_w)); // 78a6 - MINT_Ctrl
+	map(0x0078a7, 0x0078a7).rw(FUNC(generalplus_gpl951xx_device::key_change_enable1_r), FUNC(generalplus_gpl951xx_device::key_change_enable1_w)); // 78a7 - IOA/IOB key change wake enable
+	map(0x0078aa, 0x0078aa).rw(FUNC(generalplus_gpl951xx_device::key_change_enable2_r), FUNC(generalplus_gpl951xx_device::key_change_enable2_w)); // 78aa - IOE/IOF key change wake enable
+	map(0x0078ab, 0x0078ab).rw(FUNC(generalplus_gpl951xx_device::key_change_status1_r), FUNC(generalplus_gpl951xx_device::key_change_status1_w)); // 78ab - IOA/IOB key change wake status
+	map(0x0078ae, 0x0078ae).rw(FUNC(generalplus_gpl951xx_device::key_change_status2_r), FUNC(generalplus_gpl951xx_device::key_change_status2_w)); // 78ae - IOE/IOF key change wake status
 	// 78a7 - IOAB_KCIEN
 	// 78a8 - IOC_KCIEN
 	// 78a9 - IOE_KCIEN
