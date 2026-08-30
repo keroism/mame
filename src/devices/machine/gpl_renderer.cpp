@@ -40,6 +40,13 @@ void gpl_renderer_device::device_start()
 		m_rgb555_to_rgb888_current[i] = 0x0000;
 	}
 
+	for (int i = 0; i < 64; i++)
+	{
+		const double angle = i * (2.0 * M_PI / 64.0);
+		m_rot_sin[i] = int32_t(round(sin(angle) * 16384.0));
+		m_rot_cos[i] = int32_t(round(cos(angle) * 16384.0));
+	}
+
 	save_item(NAME(m_video_regs_1c));
 	save_item(NAME(m_video_regs_1d));
 	save_item(NAME(m_video_regs_1e));
@@ -226,6 +233,151 @@ void gpl_renderer_device::draw_tilestrip(bool read_from_csspace, uint32_t screen
 	}
 }
 
+// used for sprites with a zoom factor applied, the source pixels can't be read as a
+// sequential stream here, so this is kept separate from the non-zoomed case above
+void gpl_renderer_device::draw_tilestrip_zoomed(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, bool blend, bool flip_x, uint32_t tile_h, uint32_t tile_w, uint32_t dest_w, uint32_t dest_h, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t dest_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *paletteram, uint8_t blendlevel)
+{
+	uint32_t tile_scanline = dest_scanline * tile_h / dest_h;
+	if (flip_y)
+		tile_scanline = tile_h - 1 - tile_scanline;
+
+	const uint32_t rowbase = tilegfxdata_addr + words_per_tile * tile + bits_per_row * tile_scanline;
+
+	for (uint32_t i = 0; i < dest_w; i++)
+	{
+		uint32_t sx = i * tile_w / dest_w;
+		if (flip_x)
+			sx = tile_w - 1 - sx;
+
+		const uint32_t bitpos = sx * nc_bpp;
+		uint32_t m = rowbase + (bitpos >> 4);
+
+		uint32_t bits = 0;
+		for (int word = 0; word < 2; word++)
+		{
+			uint16_t b;
+			if (!read_from_csspace)
+			{
+				b = spc.read_word(m++ & 0x3fffff);
+			}
+			else
+			{
+				const int addr = m & 0x7ffffff;
+				if (addr < m_csbase)
+					b = m_cpuspace->read_word(addr);
+				else
+					b = m_cs_space->read_word(addr - m_csbase);
+				m++;
+			}
+			b = (b << 8) | (b >> 8);
+			bits = (bits << 16) | b;
+		}
+
+		const uint32_t pal = palette_offset + ((bits >> (32 - nc_bpp - (bitpos & 15))) & ((1 << nc_bpp) - 1));
+
+		const int realdrawpos = (drawx + i) & drawwidthmask;
+		if (realdrawpos >= 0 && realdrawpos < screenwidth)
+		{
+			const uint16_t rgb = paletteram[pal];
+
+			if (!(rgb & 0x8000))
+			{
+				if (blend && !(m_linebuf[realdrawpos] & 0x8000))
+				{
+					m_linebuf[realdrawpos] = (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 10) & 0x1f,  (rgb >> 10) & 0x1f, blendlevel) << 10) |
+											 (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 5)  & 0x1f,  (rgb >> 5)  & 0x1f, blendlevel) << 5) |
+											 (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 0)  & 0x1f,  (rgb >> 0)  & 0x1f, blendlevel) << 0);
+				}
+				else
+				{
+					m_linebuf[realdrawpos] = rgb;
+				}
+			}
+		}
+	}
+}
+
+// used for sprites with a rotation (and optionally a zoom factor) applied, each
+// destination pixel inside the rotated sprite's bounding box is mapped back to a
+// source pixel by the inverse transform (nearest-neighbour, centred on the sprite)
+void gpl_renderer_device::draw_tilestrip_rotozoom(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, bool blend, bool flip_x, uint32_t tile_h, uint32_t tile_w, uint32_t scale32, uint32_t rot, uint32_t bb_w, uint32_t bb_h, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t dest_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *paletteram, uint8_t blendlevel)
+{
+	// hardware rotation is clockwise, so the inverse mapping is anticlockwise
+	const int32_t rsin = m_rot_sin[rot];
+	const int32_t rcos = m_rot_cos[rot];
+	const uint32_t tilebase = tilegfxdata_addr + words_per_tile * tile;
+
+	// work in half-pixel units so co-ordinates can be centred on pixel centres
+	const int32_t dyq = 2 * int32_t(dest_scanline) + 1 - int32_t(bb_h);
+
+	for (uint32_t i = 0; i < bb_w; i++)
+	{
+		const int32_t dxq = 2 * int32_t(i) + 1 - int32_t(bb_w);
+
+		const int32_t sxq = ((( dxq * rcos + dyq * rsin) * 32) / int32_t(scale32)) >> 14;
+		const int32_t syq = (((-dxq * rsin + dyq * rcos) * 32) / int32_t(scale32)) >> 14;
+
+		const int32_t sxh = sxq + int32_t(tile_w);
+		const int32_t syh = syq + int32_t(tile_h);
+
+		if (sxh < 0 || sxh >= 2 * int32_t(tile_w) || syh < 0 || syh >= 2 * int32_t(tile_h))
+			continue;
+
+		uint32_t sx = sxh >> 1;
+		uint32_t sy = syh >> 1;
+		if (flip_x)
+			sx = tile_w - 1 - sx;
+		if (flip_y)
+			sy = tile_h - 1 - sy;
+
+		const uint32_t bitpos = sx * nc_bpp;
+		uint32_t m = tilebase + bits_per_row * sy + (bitpos >> 4);
+
+		uint32_t bits = 0;
+		for (int word = 0; word < 2; word++)
+		{
+			uint16_t b;
+			if (!read_from_csspace)
+			{
+				b = spc.read_word(m++ & 0x3fffff);
+			}
+			else
+			{
+				const int addr = m & 0x7ffffff;
+				if (addr < m_csbase)
+					b = m_cpuspace->read_word(addr);
+				else
+					b = m_cs_space->read_word(addr - m_csbase);
+				m++;
+			}
+			b = (b << 8) | (b >> 8);
+			bits = (bits << 16) | b;
+		}
+
+		const uint32_t pal = palette_offset + ((bits >> (32 - nc_bpp - (bitpos & 15))) & ((1 << nc_bpp) - 1));
+
+		const int realdrawpos = (drawx + i) & drawwidthmask;
+		if (realdrawpos >= 0 && realdrawpos < screenwidth)
+		{
+			const uint16_t rgb = paletteram[pal];
+
+			if (!(rgb & 0x8000))
+			{
+				if (blend && !(m_linebuf[realdrawpos] & 0x8000))
+				{
+					m_linebuf[realdrawpos] = (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 10) & 0x1f,  (rgb >> 10) & 0x1f, blendlevel) << 10) |
+											 (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 5)  & 0x1f,  (rgb >> 5)  & 0x1f, blendlevel) << 5) |
+											 (mix_channel((uint8_t)(m_linebuf[realdrawpos] >> 0)  & 0x1f,  (rgb >> 0)  & 0x1f, blendlevel) << 0);
+				}
+				else
+				{
+					m_linebuf[realdrawpos] = rgb;
+				}
+			}
+		}
+	}
+}
+
 
 void gpl_renderer_device::draw_linemap(bool read_from_csspace, const rectangle &cliprect, uint32_t scanline, int priority, uint32_t tilegfxdata_addr, uint16_t *scrollregs, uint16_t *tilemapregs, address_space &spc, uint16_t *paletteram)
 {
@@ -373,11 +525,54 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 		y = ((screenheight/2) - y) - (tile_h / 2);
 	}
 
+	// Y position bits 15:10 hold the per-sprite zoom level when zooming is enabled
+	// (per the GPL32900A programming guide: 0 and 32 = no zoom, 1-31 = shrink to
+	// n/32, 33-63 = enlarge to (n-28)/4, so 1/32 up to 8.75x)
+	uint32_t scale32 = 32;
+	uint32_t dest_w = tile_w;
+	uint32_t dest_h = tile_h;
+	if (m_video_regs_42 & 0x0080)
+	{
+		const uint32_t zoom = (spriteram[base_addr + 2] >> 10) & 0x3f;
+		if (zoom != 0 && zoom != 32)
+		{
+			scale32 = (zoom < 32) ? zoom : (zoom - 28) * 8; // in 1/32 units
+			dest_w = std::max<uint32_t>(1, (tile_w * scale32) / 32);
+			dest_h = std::max<uint32_t>(1, (tile_h * scale32) / 32);
+			// assume zooming is centred on the sprite's nominal box (gives smooth
+			// results for the orbiting characters in bubltea, which animate the
+			// zoom level for a depth effect)
+			x += (int32_t(tile_w) - int32_t(dest_w)) / 2;
+			y += (int32_t(tile_h) - int32_t(dest_h)) / 2;
+		}
+	}
+
+	// X position bits 15:10 hold the per-sprite rotate level when rotation is
+	// enabled, in steps of 5.625 degrees clockwise (bubltea makes its collected
+	// characters tumble with this while the drink is stirred)
+	uint32_t rot = 0;
+	uint32_t bb_w = dest_w;
+	uint32_t bb_h = dest_h;
+	if (m_video_regs_42 & 0x0040)
+	{
+		rot = (spriteram[base_addr + 1] >> 10) & 0x3f;
+		if (rot != 0)
+		{
+			// widen the drawn area to the rotated sprite's bounding box
+			const int32_t rsin = std::abs(m_rot_sin[rot]);
+			const int32_t rcos = std::abs(m_rot_cos[rot]);
+			bb_w = (dest_w * rcos + dest_h * rsin + (1 << 14) - 1) >> 14;
+			bb_h = (dest_w * rsin + dest_h * rcos + (1 << 14) - 1) >> 14;
+			x += (int32_t(dest_w) - int32_t(bb_w)) / 2;
+			y += (int32_t(dest_h) - int32_t(bb_h)) / 2;
+		}
+	}
+
 	x &= xmask;
 	y &= ymask;
 
 	int firstline = y;
-	int lastline = y + (tile_h - 1);
+	int lastline = y + (bb_h - 1);
 	lastline &= ymask;
 
 	const bool blend = (attr & 0x4000) ? true : false;
@@ -467,7 +662,12 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 
 		if ((scanx >= 0) && (scanline <= lastline))
 		{
-			draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			if (rot != 0)
+				draw_tilestrip_rotozoom(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, scale32, rot, bb_w, bb_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else if ((dest_w != tile_w) || (dest_h != tile_h))
+				draw_tilestrip_zoomed(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, dest_w, dest_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else
+				draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
 		}
 	}
 	else
@@ -479,7 +679,12 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 
 		if ((scanx >= 0) && (scanline <= templastline))
 		{
-			draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			if (rot != 0)
+				draw_tilestrip_rotozoom(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, scale32, rot, bb_w, bb_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else if ((dest_w != tile_w) || (dest_h != tile_h))
+				draw_tilestrip_zoomed(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, dest_w, dest_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else
+				draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
 		}
 		// clipped against the bottom
 		tempfirstline = firstline;
@@ -488,7 +693,12 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 
 		if ((scanx >= 0) && (scanline <= templastline))
 		{
-			draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			if (rot != 0)
+				draw_tilestrip_rotozoom(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, scale32, rot, bb_w, bb_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else if ((dest_w != tile_w) || (dest_h != tile_h))
+				draw_tilestrip_zoomed(read_from_csspace, screenwidth, xmask, blend, flip_x, tile_h, tile_w, dest_w, dest_h, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
+			else
+				draw_tilestrip(read_from_csspace, screenwidth, xmask, blend, flip_x, cliprect, tile_h, tile_w, tilegfxdata_addr, tile, scanx, x, flip_y, palette_offset, nc_bpp, bits_per_row, words_per_tile, spc, paletteram, blendlevel);
 		}
 	}
 }

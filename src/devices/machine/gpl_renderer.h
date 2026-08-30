@@ -65,6 +65,8 @@ private:
 	template<bool Blend, bool FlipX>
 	inline void draw_tilestrip(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, const rectangle &cliprect, uint32_t tile_h, uint32_t tile_w, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t tile_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *palette, uint8_t blendlevel);
 	inline void draw_tilestrip(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, bool blend, bool flip_x, const rectangle &cliprect, uint32_t tile_h, uint32_t tile_w, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t tile_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *paletteram, uint8_t blendlevel);
+	inline void draw_tilestrip_zoomed(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, bool blend, bool flip_x, uint32_t tile_h, uint32_t tile_w, uint32_t dest_w, uint32_t dest_h, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t dest_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *paletteram, uint8_t blendlevel);
+	inline void draw_tilestrip_rotozoom(bool read_from_csspace, uint32_t screenwidth, uint32_t drawwidthmask, bool blend, bool flip_x, uint32_t tile_h, uint32_t tile_w, uint32_t scale32, uint32_t rot, uint32_t bb_w, uint32_t bb_h, uint32_t tilegfxdata_addr, uint32_t tile, uint32_t dest_scanline, int drawx, bool flip_y, uint32_t palette_offset, const uint32_t nc_bpp, const uint32_t bits_per_row, const uint32_t words_per_tile, address_space &spc, uint16_t *paletteram, uint8_t blendlevel);
 	inline void draw_sprite(bool read_from_csspace, int extended_sprites_mode, uint32_t palbank, bool highres, const rectangle &cliprect, uint32_t scanline, int priority, uint32_t spritegfxdata_addr, uint32_t base_addr, address_space &spc, uint16_t *paletteram, uint16_t *spriteram);
 	virtual void draw_linemap(bool read_from_csspace, const rectangle &cliprect, uint32_t scanline, int priority, uint32_t tilegfxdata_addr, uint16_t *scrollregs, uint16_t *tilemapregs, address_space &spc, uint16_t *paletteram);
 	inline uint8_t mix_channel(uint8_t a, uint8_t b, uint8_t alpha);
@@ -99,6 +101,10 @@ private:
 
 	bool m_brightness_or_saturation_dirty;
 	uint16_t m_linebuf[640];
+
+	// 1.14 fixed point sine/cosine for the 64 sprite rotation steps of 5.625 degrees
+	int32_t m_rot_sin[64];
+	int32_t m_rot_cos[64];
 };
 
 DECLARE_DEVICE_TYPE(GPL_RENDERER, gpl_renderer_device)
