@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<!--
+license:CC0-1.0
+
+On the real device a physical straw slides down behind the transparent LCD
+panel, so the player sees it through the displayed graphics.  This layout
+approximates the effect with a translucent overlay: it tilts with the
+movement sensors, extends when pressed down, and fades out when the straw
+has not been touched for five seconds (the layout plugin is required for
+the tilt and fade, without it a static straw is shown).
+
+For screenshots without the overlay use -snapview native, or select one of
+the standard screen views in the Video Options menu.
+
+element state encoding (set by the script below):
+bit 0 = moving left, bit 1 = moving right, bit 3 = pressed down
+-->
+<mamelayout version="2">
+	<element name="straw">
+		<!-- invisible anchor so the element spans the full screen area -->
+		<rect>
+			<bounds x="0" y="0" width="128" height="160"/>
+			<color red="1.0" green="1.0" blue="1.0" alpha="0.0"/>
+		</rect>
+
+		<!-- at rest -->
+		<image statemask="0xb" state="0x0">
+			<bounds x="0" y="0" width="128" height="160"/>
+			<data><![CDATA[
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160">
+					<path d="M47 -10 L47 78 Q64 91 81 78 L81 -10" fill="none" stroke="#9a9a9a" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>
+			]]></data>
+		</image>
+
+		<!-- swinging left (pivots around the hole in the lid above the screen) -->
+		<image statemask="0x9" state="0x1">
+			<bounds x="0" y="0" width="128" height="160"/>
+			<data><![CDATA[
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160">
+					<g transform="rotate(-7 64 -30)">
+						<path d="M47 -10 L47 78 Q64 91 81 78 L81 -10" fill="none" stroke="#9a9a9a" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+					</g>
+				</svg>
+			]]></data>
+		</image>
+
+		<!-- swinging right -->
+		<image statemask="0xb" state="0x2">
+			<bounds x="0" y="0" width="128" height="160"/>
+			<data><![CDATA[
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160">
+					<g transform="rotate(7 64 -30)">
+						<path d="M47 -10 L47 78 Q64 91 81 78 L81 -10" fill="none" stroke="#9a9a9a" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+					</g>
+				</svg>
+			]]></data>
+		</image>
+
+		<!-- pressed down -->
+		<image statemask="0x8" state="0x8">
+			<bounds x="0" y="0" width="128" height="160"/>
+			<data><![CDATA[
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160">
+					<path d="M47 -10 L47 85 Q64 98 81 85 L81 -10" fill="none" stroke="#9a9a9a" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>
+			]]></data>
+		</image>
+	</element>
+
+	<view name="Simulated Straw">
+		<screen index="0">
+			<bounds x="0" y="0" width="128" height="160"/>
+		</screen>
+		<!-- clicking the straw pushes it down; the script overrides the display state -->
+		<element id="straw" ref="straw" inputtag="IN1" inputmask="0x0010">
+			<bounds x="0" y="0" width="128" height="160"/>
+		</element>
+	</view>
+
+	<script><![CDATA[
+		file:set_resolve_tags_callback(
+				function ()
+					local port = file.device:ioport("IN1")
+					local view = file.views["Simulated Straw"]
+					local straw = view.items["straw"]
+
+					local state = 0
+					local alpha = 1.0
+					local last_active = machine.time:as_double()
+
+					view:set_prepare_items_callback(
+							function ()
+								local val = port:read()
+								local pressed = (val & 0x10) == 0 -- active low
+								local left = (val & 0x02) ~= 0
+								local right = (val & 0x04) ~= 0
+								state = (pressed and 8 or 0) | (left and 1 or 0) | (right and 2 or 0)
+
+								local now = machine.time:as_double()
+								if pressed or left or right then
+									last_active = now
+								end
+
+								-- fade out when the straw has been idle for five seconds
+								local idle = now - last_active
+								if idle < 5.0 then
+									alpha = 1.0
+								elseif idle < 5.5 then
+									alpha = 1.0 - ((idle - 5.0) * 2.0)
+								else
+									alpha = 0.0
+								end
+							end)
+
+					straw:set_element_state_callback(function () return state end)
+					straw:set_color_callback(function () return emu.render_color(alpha, 1.0, 1.0, 1.0) end)
+				end)
+	]]></script>
+</mamelayout>

@@ -13,6 +13,8 @@
 #include "screen.h"
 #include "speaker.h"
 
+#include "bubltea.lh"
+
 
 namespace {
 
@@ -561,6 +563,9 @@ void generalplus_gpl951xx_game_state::bubltea(machine_config &config)
 	m_maincpu->i80_cmd_out().set(FUNC(generalplus_gpl951xx_game_state::st7735_i80_cmd));
 	m_maincpu->i80_data_out().set(FUNC(generalplus_gpl951xx_game_state::st7735_i80_data));
 	m_screen->set_screen_update(FUNC(generalplus_gpl951xx_game_state::st7735_screen_update));
+
+	// the physical straw is visible through the transparent LCD, simulate it
+	config.set_default_layout(layout_bubltea);
 }
 
 
