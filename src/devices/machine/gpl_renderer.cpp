@@ -575,6 +575,7 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 	int lastline = y + (bb_h - 1);
 	lastline &= ymask;
 
+
 	const bool blend = (attr & 0x4000) ? true : false;
 	bool flip_x = (attr & 0x0004) ? true : false;
 	bool flip_y = (attr & 0x0008) ? true : false;
@@ -656,7 +657,9 @@ void gpl_renderer_device::draw_sprite(bool read_from_csspace, int extended_sprit
 	palette_offset >>= nc_bpp;
 	palette_offset <<= nc_bpp;
 
-	if (firstline < lastline)
+	// equality happens for sprites zoomed down to a single line, they must not be
+	// treated as wrapped or the wrap handling below draws them on every scanline
+	if (firstline <= lastline)
 	{
 		int scanx = scanline - firstline;
 
