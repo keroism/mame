@@ -378,12 +378,16 @@ static INPUT_PORTS_START( bubltea ) // has 3 surface buttons and the straw
 	PORT_INCLUDE(base)
 
 	PORT_MODIFY("IN1")
+	// the straw sweeping through the drink triggers two movement sensors; the
+	// game reacts to the pulses (alternate left/right to stir)
+	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT ) PORT_NAME("Straw Left")
+	PORT_BIT( 0x0004, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT ) PORT_NAME("Straw Right")
 	PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_BUTTON1 ) PORT_NAME("Power / Next")
-	PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_BUTTON2 )
+	PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_BUTTON2 ) PORT_NAME("Straw Press")
 	PORT_BIT( 0x0020, IP_ACTIVE_LOW, IPT_BUTTON3 ) PORT_NAME("Increase Value")
 	PORT_BIT( 0x0040, IP_ACTIVE_LOW, IPT_BUTTON4 ) PORT_NAME("Back")
 
-	PORT_MODIFY("ADC5") // battery voltage sense? the game refuses to start if this reads full scale or too low
+	PORT_MODIFY("ADC5") // battery voltage sense, full scale or near-zero readings are rejected
 	PORT_CONFNAME( 0xffff, 0xa000, "Battery Level" )
 	PORT_CONFSETTING(      0xa000, "Normal" )
 	PORT_CONFSETTING(      0x0000, "Empty" )
