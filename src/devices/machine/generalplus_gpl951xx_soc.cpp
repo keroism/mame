@@ -1022,7 +1022,7 @@ template<int Port>
 u16 generalplus_gpl951xx_device::io_buffer_r()
 {
 	LOGMASKED(LOG_OTHER, "%s: generalplus_gpl951xx_device::io_%c_buffer_r\n", machine().describe_context(), 'a' + Port);
-	return m_port_in[Port]();
+	return m_io_buffer[Port];
 }
 
 template<int Port>

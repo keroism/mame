@@ -47,6 +47,7 @@ public:
 	int puni_poke_r();
 	int puni_beam_r();
 	template <unsigned N> int puni_pad_r();
+	int punifrnd_sensor_r();
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -61,6 +62,7 @@ protected:
 	template <u8 Port> u16 adc_r();
 
 	void porta_w(u16 data);
+	void portb_w(u16 data);
 
 	void spi_reset(u8 data);
 	void spi_access_from_soc(u8 data);
@@ -80,6 +82,8 @@ protected:
 	required_device<bftetris_lcdc_device> m_lcdc;
 	optional_device<st7735_lcdc_device> m_st7735;
 	optional_ioport m_finger;
+
+	u16 m_iob_out = 0;
 };
 
 u32 generalplus_gpl951xx_game_state::bftetris_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
@@ -126,9 +130,22 @@ int generalplus_gpl951xx_game_state::puni_pad_r()
 	return BIT(m_finger->read(), 4 + N);
 }
 
+int generalplus_gpl951xx_game_state::punifrnd_sensor_r()
+{
+	// modulated IR proximity sensor instead of a contact: the game toggles the
+	// IR LED on IOB6 through the buffer register and expects the sensor to
+	// read low with the LED off and high with the LED on while a finger is in
+	return ((m_finger->read() & 0xf3) && !BIT(m_iob_out, 6)) ? 1 : 0;
+}
+
 void generalplus_gpl951xx_game_state::porta_w(u16 data)
 {
 	logerror("%s: Port A:WRITE %04x\n", machine().describe_context(), data);
+}
+
+void generalplus_gpl951xx_game_state::portb_w(u16 data)
+{
+	m_iob_out = data;
 }
 
 void generalplus_gpl951xx_game_state::machine_start()
@@ -136,6 +153,8 @@ void generalplus_gpl951xx_game_state::machine_start()
 	m_genspi->set_rom_ptr(memregion("spi")->base());
 	m_genspi->set_rom_size(memregion("spi")->bytes());
 	m_maincpu->set_spi_romregion(memregion("spi")->base(), memregion("spi")->bytes());
+
+	save_item(NAME(m_iob_out));
 }
 
 void generalplus_gpl951xx_game_state::machine_reset()
@@ -298,6 +317,37 @@ static INPUT_PORTS_START( puni )
 	PORT_CONFSETTING(      0x0000, "Empty" )
 INPUT_PORTS_END
 
+static INPUT_PORTS_START( punifrnd )
+	PORT_INCLUDE(base)
+
+	PORT_MODIFY("IN1") // IR proximity sensor on IOB5 (LED driven on IOB6), IOB1-IOB4 are used by the IR communication hardware
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::punifrnd_sensor_r))
+
+	PORT_MODIFY("IN2") // d-pad on IOC9-IOC12 instead of IOB1-IOB4
+	PORT_BIT( 0x0200, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<0>))
+	PORT_BIT( 0x0400, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<1>))
+	PORT_BIT( 0x0800, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<2>))
+	PORT_BIT( 0x1000, IP_ACTIVE_LOW, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<3>))
+
+	PORT_MODIFY("IN5")
+	PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_BUTTON1 )
+	PORT_BIT( 0x4000, IP_ACTIVE_LOW, IPT_BUTTON2 )
+	PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_BUTTON3 )
+
+	PORT_MODIFY("ADC5") // battery voltage sense, game locks up on a low battery warning screen if this reads too low
+	PORT_CONFNAME( 0xffff, 0xffff, "Battery Level" )
+	PORT_CONFSETTING(      0xffff, "Full" )
+	PORT_CONFSETTING(      0x0000, "Empty" )
+
+	PORT_START("FINGER")
+	PORT_BIT( 0x0001, IP_ACTIVE_HIGH, IPT_BUTTON4 ) PORT_NAME("Poke Finger")
+	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_BUTTON5 ) PORT_NAME("Hover Finger")
+	PORT_BIT( 0x0010, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP )
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN )
+	PORT_BIT( 0x0040, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT )
+	PORT_BIT( 0x0080, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT )
+INPUT_PORTS_END
+
 static INPUT_PORTS_START( segapet1 )
 	PORT_INCLUDE(base)
 
@@ -405,6 +455,7 @@ void generalplus_gpl951xx_game_state::gpl951xx(machine_config &config)
 	m_maincpu->porte_in().set(FUNC(generalplus_gpl951xx_game_state::port_r<4>));
 	m_maincpu->portf_in().set(FUNC(generalplus_gpl951xx_game_state::port_r<5>));
 	m_maincpu->porta_out().set(FUNC(generalplus_gpl951xx_game_state::porta_w));
+	m_maincpu->portb_out().set(FUNC(generalplus_gpl951xx_game_state::portb_w));
 	m_maincpu->adc0_in().set(FUNC(generalplus_gpl951xx_game_state::adc_r<0>));
 	m_maincpu->adc1_in().set(FUNC(generalplus_gpl951xx_game_state::adc_r<1>));
 	m_maincpu->adc2_in().set(FUNC(generalplus_gpl951xx_game_state::adc_r<2>));
@@ -724,7 +775,7 @@ CONS(2020, bftetris, 0, 0, bftetris, bfspyhnt, generalplus_gpl951xx_game_state, 
 CONS(2021, punirune,  0,        0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (PUNIRUNZU_MAIN_V3, pastel blue, Europe)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // looks similar to above, but has HXR-1 instead of the usual markings on the PCB
-CONS(2021, punirunea, punirune, 0, puni, bfspyhnt, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (HXR-1 PCB)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
+CONS(2021, punirunea, punirune, 0, puni, puni,     generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (HXR-1 PCB)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // the case on these looks like the European release, including English title logo.  CPU is a glob, PUNIRUNZU_MAIN_DICE_V1 on PCB
 CONS(2021, punij1m,  punirune, 0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (PUNIRUNZU_MAIN_DICE_V1, mint/pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
@@ -734,9 +785,9 @@ CONS(2021, punij1pu, punirune, 0, puni, puni, generalplus_gpl951xx_game_state, e
 CONS(2021, punij2pk, punirune, 0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (PUNIRUNZU_MAIN_V2, pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // has a link feature
-CONS(2021, punifrnd, 0,        0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes Punitomo Tsuushin (hot pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
+CONS(2021, punifrnd, 0,        0, puni, punifrnd, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes Punitomo Tsuushin (hot pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
-CONS(2021, punistar, 0,        0, puni, base, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes Punistarz (pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
+CONS(2021, punistar, 0,        0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes Punistarz (pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // 'Poo' emoji shaped item, comes in multiple colours, has a solder pad which might change between units
 // this was dumped from the 'Lavender' unit
