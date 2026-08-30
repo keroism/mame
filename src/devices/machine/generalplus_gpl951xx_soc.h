@@ -85,6 +85,7 @@ protected:
 
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
+	virtual space_config_vector memory_space_config() const override;
 
 	void gpspi_direct_internal_map(address_map &map) ATTR_COLD;
 	template<int Port> void add_port(address_map &map, u32 base) ATTR_COLD;
@@ -181,6 +182,9 @@ private:
 
 	u16 spi_direct_r(offs_t offset);
 	u16 spi_direct_bank_r(offs_t offset);
+
+	u16 flash_r(offs_t offset);
+	void flash_map(address_map &map) ATTR_COLD;
 
 	u8 get_byte_from_rx_fifo();
 
@@ -303,6 +307,8 @@ private:
 	// config
 	u8 *m_spiregion;
 	u32 m_spisize;
+
+	address_space_config m_flash_config;
 
 	devcb_write8 m_spi_out;
 	devcb_write8 m_spi_out_cmd;

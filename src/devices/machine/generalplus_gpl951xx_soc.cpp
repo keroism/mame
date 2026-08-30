@@ -1478,6 +1478,32 @@ u16 generalplus_gpl951xx_device::spi_direct_bank_r(offs_t offset)
 
 }
 
+// The PPU fetches its graphics over its own bus, so unlike CPU reads through
+// the banked window at 0x200000, its view of the SPI memory is flat and is not
+// affected by the CPU's BankSwitch register (punirune banks the flash for data
+// accesses while a game is drawing, which corrupted the fetches when they went
+// through the CPU space)
+u16 generalplus_gpl951xx_device::flash_r(offs_t offset)
+{
+	if (!m_spiregion)
+		return 0x0000;
+
+	u16 ret = (m_spiregion[((offset * 2) + 0) & (m_spisize-1)]) | (m_spiregion[((offset * 2) + 1) & (m_spisize-1)] << 8);
+	return ret;
+}
+
+void generalplus_gpl951xx_device::flash_map(address_map &map)
+{
+	map(0x0000000, 0x7ffffff).r(FUNC(generalplus_gpl951xx_device::flash_r));
+}
+
+device_memory_interface::space_config_vector generalplus_gpl951xx_device::memory_space_config() const
+{
+	auto vec = unsp_20_device::memory_space_config();
+	vec.emplace_back(AS_DATA, &m_flash_config);
+	return vec;
+}
+
 template<int Port>
 void generalplus_gpl951xx_device::add_port(address_map &map, u32 base)
 {
@@ -2058,6 +2084,9 @@ void generalplus_gpl951xx_device::device_add_mconfig(machine_config &config)
 	m_spg_video->write_video_irq_callback().set(FUNC(generalplus_gpl951xx_device::videoirq_w));
 	m_spg_video->space_read_callback().set(FUNC(generalplus_gpl951xx_device::read_space));
 	m_spg_video->set_video_space(DEVICE_SELF, AS_PROGRAM);
+	// video data at 0x9000 and above is fetched from the flat SPI space so that
+	// the fetches are not affected by the CPU's bank register, see flash_r
+	m_spg_video->set_cs_video_space(DEVICE_SELF, AS_DATA, 0x9000);
 
 	TIMER(config, m_timer[0]).configure_generic(FUNC(generalplus_gpl951xx_device::timer_cb<0>));
 	TIMER(config, m_timer[1]).configure_generic(FUNC(generalplus_gpl951xx_device::timer_cb<1>));
@@ -2092,6 +2121,7 @@ DEFINE_DEVICE_TYPE(GPL951XX, generalplus_gpl951xx_device, "gpl951xx", "GeneralPl
 generalplus_gpl951xx_device::generalplus_gpl951xx_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, u32 clock, address_map_constructor internal) :
 	unsp_20_device(mconfig, type, tag, owner, clock, internal),
 	device_mixer_interface(mconfig, *this),
+	m_flash_config("flash", ENDIANNESS_BIG, 16, 27, -1, address_map_constructor(FUNC(generalplus_gpl951xx_device::flash_map), this)),
 	m_spi_out(*this),
 	m_spi_out_cmd(*this),
 	m_spi_reset(*this),
