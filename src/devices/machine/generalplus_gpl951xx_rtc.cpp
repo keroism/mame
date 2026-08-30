@@ -49,7 +49,10 @@ void gpl951xx_rtc_device::device_start()
 	save_item(NAME(m_alarmdat));
 	save_item(NAME(m_timerval));
 
+	save_item(NAME(m_reg00));
+
 	// not on reset? (should be saved as NV?)
+	m_reg00 = 0;
 	m_loadcnt = 0;
 	m_alarmdat = 0;
 	m_timerval = 0;
@@ -76,7 +79,15 @@ void gpl951xx_rtc_device::device_reset()
 u8 gpl951xx_rtc_device::reg00_r()
 {
 	LOGMASKED(LOG_RTC, "%s: gpl951xx_rtc_device::reg00_r\n", machine().describe_context());
-	return 0x00;
+	// punirune enables the RTC clock and waits for Rtcclken to read back as set
+	// before showing timed message boxes, never report Busy or the resets as held
+	return m_reg00 & 0x1c;
+}
+
+void gpl951xx_rtc_device::reg00_w(u8 data)
+{
+	LOGMASKED(LOG_RTC, "%s: gpl951xx_rtc_device::reg00_w %02x\n", machine().describe_context(), data);
+	m_reg00 = data;
 }
 
 // Reg01
@@ -180,7 +191,7 @@ void gpl951xx_rtc_device::rtc_regs(address_map &map)
 {
 	if (!has_configured_map(0))
 	{
-		map(0x00, 0x00).r(FUNC(gpl951xx_rtc_device::reg00_r));
+		map(0x00, 0x00).rw(FUNC(gpl951xx_rtc_device::reg00_r), FUNC(gpl951xx_rtc_device::reg00_w));
 		map(0x01, 0x01).r(FUNC(gpl951xx_rtc_device::reg01_r));
 		map(0x02, 0x02).rw(FUNC(gpl951xx_rtc_device::reg02_r), FUNC(gpl951xx_rtc_device::reg02_w));
 

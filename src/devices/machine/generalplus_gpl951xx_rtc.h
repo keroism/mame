@@ -38,6 +38,7 @@ private:
 	TIMER_DEVICE_CALLBACK_MEMBER(rtc_cb);
 
 	u8 reg00_r();
+	void reg00_w(u8 data);
 	u8 reg01_r();
 	u8 reg02_r();
 	void reg02_w(u8 data);
@@ -56,6 +57,7 @@ private:
 	u8 m_read_dat;
 	u8 m_write_dat;
 
+	u8 m_reg00;
 	u8 m_reg02;
 
 	u8 m_reg40;
