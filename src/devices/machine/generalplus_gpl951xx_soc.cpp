@@ -746,7 +746,10 @@ void generalplus_gpl951xx_device::tft_transfer_frame()
 {
 	const rectangle visarea = m_screen->visible_area();
 
-	m_spg_video->screen_update(*m_screen, m_tft_bitmap, visarea);
+	if (m_spg_video->ppu_enabled())
+		m_spg_video->screen_update(*m_screen, m_tft_bitmap, visarea);
+	else
+		m_tft_bitmap.fill(rgb_t::black(), visarea);
 
 	for (int y = visarea.min_y; y <= visarea.max_y; y++)
 	{

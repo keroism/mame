@@ -127,6 +127,7 @@ public:
 
 	u16 ppu_enable_r();
 	void ppu_enable_w(u16 data);
+	bool ppu_enabled() const { return bool(m_707f & 0x0001); }
 
 	void tv_saturation_w(u16 data);
 	void tv_hue_w(u16 data);
