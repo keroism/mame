@@ -319,6 +319,36 @@ static INPUT_PORTS_START( puni )
 	PORT_CONFSETTING(      0x0000, "Empty" )
 INPUT_PORTS_END
 
+static INPUT_PORTS_START( punirunea ) // the HXR-1 PCB wires the pad and buttons active high, has a 4th button on IOF8, and uses a modulated IR proximity sensor for the finger
+	PORT_INCLUDE(base)
+
+	PORT_MODIFY("IN1") // d-pad on IOB1-IOB4, IR proximity sensor on IOB5 (LED driven on IOB6)
+	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<0>))
+	PORT_BIT( 0x0004, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<1>))
+	PORT_BIT( 0x0008, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<2>))
+	PORT_BIT( 0x0010, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::puni_pad_r<3>))
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_CUSTOM ) PORT_READ_LINE_MEMBER(FUNC(generalplus_gpl951xx_game_state::punifrnd_sensor_r))
+
+	PORT_START("FINGER")
+	PORT_BIT( 0x0001, IP_ACTIVE_HIGH, IPT_BUTTON5 ) PORT_NAME("Poke Finger")
+	PORT_BIT( 0x0002, IP_ACTIVE_HIGH, IPT_BUTTON6 ) PORT_NAME("Hover Finger")
+	PORT_BIT( 0x0010, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP )
+	PORT_BIT( 0x0020, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN )
+	PORT_BIT( 0x0040, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT )
+	PORT_BIT( 0x0080, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT )
+
+	PORT_MODIFY("IN5")
+	PORT_BIT( 0x0100, IP_ACTIVE_HIGH, IPT_BUTTON1 )
+	PORT_BIT( 0x2000, IP_ACTIVE_HIGH, IPT_BUTTON2 )
+	PORT_BIT( 0x4000, IP_ACTIVE_HIGH, IPT_BUTTON3 )
+	PORT_BIT( 0x8000, IP_ACTIVE_HIGH, IPT_BUTTON4 )
+
+	PORT_MODIFY("ADC5") // battery voltage sense, game locks up on a low battery warning screen if this reads too low
+	PORT_CONFNAME( 0xffff, 0xffff, "Battery Level" )
+	PORT_CONFSETTING(      0xffff, "Full" )
+	PORT_CONFSETTING(      0x0000, "Empty" )
+INPUT_PORTS_END
+
 static INPUT_PORTS_START( punifrnd )
 	PORT_INCLUDE(base)
 
@@ -784,7 +814,7 @@ CONS(2020, bftetris, 0, 0, bftetris, bfspyhnt, generalplus_gpl951xx_game_state, 
 CONS(2021, punirune,  0,        0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (PUNIRUNZU_MAIN_V3, pastel blue, Europe)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // looks similar to above, but has HXR-1 instead of the usual markings on the PCB
-CONS(2021, punirunea, punirune, 0, puni, puni,     generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (HXR-1 PCB)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
+CONS(2021, punirunea, punirune, 0, puni, punirunea, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (HXR-1 PCB)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
 
 // the case on these looks like the European release, including English title logo.  CPU is a glob, PUNIRUNZU_MAIN_DICE_V1 on PCB
 CONS(2021, punij1m,  punirune, 0, puni, puni, generalplus_gpl951xx_game_state, empty_init, "Takara Tomy", "Punirunes (PUNIRUNZU_MAIN_DICE_V1, mint/pink, Japan)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_SOUND)
