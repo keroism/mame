@@ -379,6 +379,7 @@ void generalplus_gpl951xx_device::device_start()
 
 	m_tft_bitmap.allocate(320, 240);
 
+
 	save_item(NAME(m_byteswap));
 	save_item(NAME(m_timer_ctrl));
 	save_item(NAME(m_timer_preload));
@@ -394,6 +395,7 @@ void generalplus_gpl951xx_device::device_start()
 	save_item(NAME(m_spi_bank));
 	save_item(NAME(m_memmode_wcmd));
 	save_item(NAME(m_tft_ctrl));
+	save_item(NAME(m_tft_frame_pushed));
 	save_item(NAME(m_spifc_rx_fifo));
 	save_item(NAME(m_spifc_rx_read_latch));
 	save_item(NAME(m_io_buffer));
@@ -448,6 +450,7 @@ void generalplus_gpl951xx_device::device_reset()
 	m_spifc_rx_read_latch = 0;
 	m_memmode_wcmd = 0;
 	m_tft_ctrl = 0;
+	m_tft_frame_pushed = false;
 	m_keych_enable1 = 0;
 	m_keych_enable2 = 0;
 	m_keych_status1 = 0;
@@ -739,12 +742,42 @@ void generalplus_gpl951xx_device::tft_ctrl_w(u16 data)
 	}
 }
 
+u32 generalplus_gpl951xx_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+{
+	// when the game pushes frames to the panel over the i80 bus using the TFT
+	// memory modes, the panel shows the most recently pushed frame - the game
+	// only pushes when it has finished composing a frame, sampling the live
+	// PPU state instead shows partially rebuilt scenes (background flicker in
+	// punirune's mini-games)
+	if (m_tft_frame_pushed)
+	{
+		if (!(m_tft_ctrl & 0x0001)) // display off
+		{
+			bitmap.fill(rgb_t::black(), cliprect);
+			return 0;
+		}
+		copybitmap(bitmap, m_tft_bitmap, 0, 0, 0, 0, cliprect);
+		return 0;
+	}
+
+	// no output while the PPU is disabled (punirune turns the PPU off while it
+	// rebuilds the scene when waking from sleep, the partial state must not show)
+	if (!m_spg_video->ppu_enabled())
+	{
+		bitmap.fill(rgb_t::black(), cliprect);
+		return 0;
+	}
+	return m_spg_video->screen_update(screen, bitmap, cliprect);
+}
+
 // stream a full PPU-rendered frame out of the I80 interface as RGB565 byte pairs
 // (used by games that let the TFT engine transfer the PPU output to the panel
 //  in memory mode instead of showing the PPU output on an RGB panel directly)
 void generalplus_gpl951xx_device::tft_transfer_frame()
 {
 	const rectangle visarea = m_screen->visible_area();
+
+	m_tft_frame_pushed = true;
 
 	if (m_spg_video->ppu_enabled())
 		m_spg_video->screen_update(*m_screen, m_tft_bitmap, visarea);
@@ -754,7 +787,6 @@ void generalplus_gpl951xx_device::tft_transfer_frame()
 	for (int y = visarea.min_y; y <= visarea.max_y; y++)
 	{
 		u32 const *const src = &m_tft_bitmap.pix(y);
-
 		for (int x = visarea.min_x; x <= visarea.max_x; x++)
 		{
 			u32 const pix = src[x];

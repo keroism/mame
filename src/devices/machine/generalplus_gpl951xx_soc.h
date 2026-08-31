@@ -67,17 +67,7 @@ public:
 	void recieve_spi_fifo_data(u8 data);
 
 	IRQ_CALLBACK_MEMBER(irq_vector_cb);
-	u32 screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
-	{
-		// no output while the PPU is disabled (punirune turns the PPU off while it
-		// rebuilds the scene when waking from sleep, the partial state must not show)
-		if (!m_spg_video->ppu_enabled())
-		{
-			bitmap.fill(rgb_t::black(), cliprect);
-			return 0;
-		}
-		return m_spg_video->screen_update(screen, bitmap, cliprect);
-	}
+	u32 screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
 	void vblank(int state);
 
 protected:
@@ -297,6 +287,7 @@ private:
 
 	u16 m_memmode_wcmd;
 	u16 m_tft_ctrl;
+	bool m_tft_frame_pushed;
 	bitmap_rgb32 m_tft_bitmap;
 
 	u16 m_tft_rgb_ctrl;
