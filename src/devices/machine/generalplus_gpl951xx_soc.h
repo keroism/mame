@@ -128,6 +128,7 @@ private:
 	// Timers (different compared to GPL162xx)
 	template<int Timer> u16 timer_preload_r();
 	template<int Timer> void timer_preload_w(u16 data);
+	attotime timer_period(int timer, u16 ctrl);
 	template<int Timer> u16 timer_ctrl_r();
 	template<int Timer> void timer_ctrl_w(u16 data);
 	template<int Timer> void timer_ccpb_ctrl_w(u16 data);

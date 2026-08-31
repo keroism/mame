@@ -141,6 +141,17 @@ void generalplus_gpl951xx_device::spifc_cmd_w(u16 data)
 		m_spi_out((m_spifc_addr >> 0) & 0xff);
 
 	}
+	else if ((data & 0xff) == 0x02)
+	{
+		// A Page Program issued with the wo_addr bit carries no address phase
+		// on the bus; the SPIFC supplies its internally tracked address, which
+		// advances with every byte programmed.  The save code depends on this,
+		// writing its records with byte-wise wo_addr program transactions
+		// after seeding the address registers just once.
+		m_spi_out((m_spifc_addr >> 16) & 0xff);
+		m_spi_out((m_spifc_addr >> 8) & 0xff);
+		m_spi_out((m_spifc_addr >> 0) & 0xff);
+	}
 
 	// how does byte count work? the FIFO is apparently in words
 	for (int i = 0; i < m_spifc_rx_bc; i++)
@@ -226,6 +237,9 @@ void generalplus_gpl951xx_device::spifc_txdat_w(u16 data)
 {
 	LOGMASKED(LOG_SPIFC, "%s: spifc_txdat_w %04x\n", machine().describe_context(), data);
 	m_spi_out(data & 0xff);
+
+	if ((m_spifc_cmd & 0xff) == 0x02)
+		m_spifc_addr++; // the internal address follows the bytes programmed
 }
 
 // P_SPIFC_RX_Data
@@ -558,13 +572,11 @@ void generalplus_gpl951xx_device::timer_ctrl_w(u16 data)
 	{
 		if (data & 0x2000)
 		{
-			// currently hardcoded, need to figure out how to use the preload and timer source registers properly!
-			if (Timer == 6)
-				m_timer[Timer]->adjust(attotime::zero, 0, attotime::from_hz(8000));
-			else if (Timer == 3)
-				m_timer[Timer]->adjust(attotime::zero, 0, attotime::from_hz(20000));
+			const attotime period = timer_period(Timer, data);
+			if (!period.is_never())
+				m_timer[Timer]->adjust(attotime::zero, 0, period);
 			else
-				m_timer[Timer]->adjust(attotime::zero, 0, attotime::from_hz(1000));
+				m_timer[Timer]->adjust(attotime::never);
 		}
 		else
 		{
@@ -575,6 +587,29 @@ void generalplus_gpl951xx_device::timer_ctrl_w(u16 data)
 
 	m_timer_ctrl[Timer] = (m_timer_ctrl[Timer] & 0x8000) | (data & 0x7fff);
 	update_interrupts(1);
+}
+
+attotime generalplus_gpl951xx_device::timer_period(int timer, u16 ctrl)
+{
+	// the timer counts up from the preload value and overflows after
+	// (0x10000 - preload) counts of the selected source A
+	// (SYSCLK is twice the unSP clock, so SYSCLK/2 is simply clock())
+	const u32 counts = 0x10000 - m_timer_preload[timer];
+	double srcfreq = 0.0;
+	switch (ctrl & 0x000f)
+	{
+	case 0x0: srcfreq = clock(); break;         // SYSCLK/2
+	case 0x1: srcfreq = clock() / 128.0; break; // SYSCLK/256
+	case 0x2: srcfreq = 32768.0; break;
+	case 0x3: srcfreq = 8192.0; break;
+	case 0x4: srcfreq = 4096.0; break;
+	default: break; // logic levels, overflow chaining and external sources aren't useful periods
+	}
+
+	if (srcfreq != 0.0)
+		return attotime::from_hz(srcfreq / counts);
+
+	return attotime::never;
 }
 
 template<int Timer>
@@ -589,6 +624,17 @@ void generalplus_gpl951xx_device::timer_preload_w(u16 data)
 {
 	logerror("%s: timer%c_preload_w %04x\n", machine().describe_context(), 'a'+Timer, data);
 	m_timer_preload[Timer] = data;
+
+	// bftetris enables its sample timers before writing the preload, so the
+	// period has to follow preload changes made while the timer is running
+	if (m_timer_ctrl[Timer] & 0x2000)
+	{
+		const attotime period = timer_period(Timer, m_timer_ctrl[Timer]);
+		if (!period.is_never())
+			m_timer[Timer]->adjust(period, 0, period);
+		else
+			m_timer[Timer]->adjust(attotime::never);
+	}
 }
 
 
@@ -1502,8 +1548,12 @@ u16 generalplus_gpl951xx_device::spi_direct_bank_r(offs_t offset)
 	if (!m_spiregion)
 		return 0x0000;
 
+	// the banked window continues seamlessly from the end of the directly
+	// mapped area, with the bank register selecting a further 8MB page: the
+	// speech data punirunea streams through here with the bank set to 1 must
+	// come from the same page as everything else on a part this size
 	offset += 0x1f7000;
-	offset += (m_spi_bank & 0x3f) * 0x200000;
+	offset += (m_spi_bank & 0x3f) * 0x400000;
 
 	u16 ret = (m_spiregion[((offset * 2) + 0) & (m_spisize-1)]) | (m_spiregion[((offset * 2) + 1) & (m_spisize-1)] << 8);
 	return ret;
@@ -2047,13 +2097,27 @@ void generalplus_gpl951xx_device::update_interrupts(int state)
 		set_state_unsynced(UNSP_IRQ4_LINE, CLEAR_LINE);
 	}
 
-	if ((m_gpl_chx->is_cha_fifo_empty_irq()) || (m_gpl_chx->is_chb_fifo_empty_irq()))
+	// the CHA/CHB FIFO empty interrupts are serviced on IRQ0 by default, but can
+	// be promoted to the FIQ with the corresponding INT_Priority1 bits
+	const bool cha_fifo_irq = m_gpl_chx->is_cha_fifo_empty_irq();
+	const bool chb_fifo_irq = m_gpl_chx->is_chb_fifo_empty_irq();
+
+	if ((cha_fifo_irq && !(m_int_priority_1 & 0x0010)) || (chb_fifo_irq && !(m_int_priority_1 & 0x0020)))
 	{
-		set_state_unsynced(UNSP_IRQ1_LINE, ASSERT_LINE);
+		set_state_unsynced(UNSP_IRQ0_LINE, ASSERT_LINE);
 	}
 	else
 	{
-		set_state_unsynced(UNSP_IRQ1_LINE, CLEAR_LINE);
+		set_state_unsynced(UNSP_IRQ0_LINE, CLEAR_LINE);
+	}
+
+	if ((cha_fifo_irq && (m_int_priority_1 & 0x0010)) || (chb_fifo_irq && (m_int_priority_1 & 0x0020)))
+	{
+		set_state_unsynced(UNSP_FIQ_LINE, ASSERT_LINE);
+	}
+	else
+	{
+		set_state_unsynced(UNSP_FIQ_LINE, CLEAR_LINE);
 	}
 
 }
@@ -2108,6 +2172,7 @@ void generalplus_gpl951xx_device::device_add_mconfig(machine_config &config)
 	GPL_CHX(config, m_gpl_chx);
 	m_gpl_chx->cha_write_callback().set(FUNC(generalplus_gpl951xx_device::dac_0_w));
 	m_gpl_chx->chb_write_callback().set(FUNC(generalplus_gpl951xx_device::dac_1_w));
+	m_gpl_chx->updateirqs_callback().set(FUNC(generalplus_gpl951xx_device::update_interrupts));
 
 	GPL_TIMEBASE(config, m_gpl_timebase);
 	m_gpl_timebase->updateirqs_callback().set(FUNC(generalplus_gpl951xx_device::update_interrupts));
