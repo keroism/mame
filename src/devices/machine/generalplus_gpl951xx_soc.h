@@ -238,6 +238,7 @@ private:
 	void free_width_w(u16 data);
 
 	inline u16 read_space(offs_t offset);
+	u16 audio_space_r(offs_t offset);
 	inline void write_space(offs_t offset, u16 data);
 
 	template<int Timer> TIMER_DEVICE_CALLBACK_MEMBER(timer_cb);

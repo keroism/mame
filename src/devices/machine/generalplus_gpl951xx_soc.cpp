@@ -462,6 +462,11 @@ void generalplus_gpl951xx_device::device_reset()
 	m_spifc_timing = 0;
 	m_bytes_in_spifc_rx_fifo = 0;
 	m_spifc_rx_read_latch = 0;
+
+	// centre the CHA/CHB DACs; a converter that never gets fed must rest at
+	// mid-scale, not at the bottom rail where it eats all the mixing headroom
+	m_dac0->write(0);
+	m_dac1->write(0);
 	m_memmode_wcmd = 0;
 	m_tft_ctrl = 0;
 	m_tft_frame_pushed = false;
@@ -2129,6 +2134,23 @@ u16 generalplus_gpl951xx_device::read_space(offs_t offset)
 	return val;
 }
 
+u16 generalplus_gpl951xx_device::audio_space_r(offs_t offset)
+{
+	// The SPU's wave addresses follow the CPU's view of the flash (the
+	// directly mapped area with its seamless continuation above 0x200000),
+	// but the fetches happen on the SPU's own bus and must not be affected
+	// by the CPU's bank register, so resolve the flash portion here.
+	// Addresses below the flash fall through so envelope data can come
+	// from RAM.
+	if (offset >= 0x9000 && m_spiregion)
+	{
+		const offs_t flashword = offset - 0x9000;
+		return (m_spiregion[((flashword * 2) + 0) & (m_spisize - 1)]) | (m_spiregion[((flashword * 2) + 1) & (m_spisize - 1)] << 8);
+	}
+
+	return read_space(offset);
+}
+
 void generalplus_gpl951xx_device::write_space(offs_t offset, u16 data)
 {
 	address_space &space = this->space(AS_PROGRAM);
@@ -2155,9 +2177,9 @@ void generalplus_gpl951xx_device::videoirq_w(int state)
 
 void generalplus_gpl951xx_device::device_add_mconfig(machine_config &config)
 {
-	SUNPLUS_GCM394_AUDIO(config, m_spg_audio, DERIVED_CLOCK(1, 1));
+	SUNPLUS_GCM394_AUDIO(config, m_spg_audio, DERIVED_CLOCK(2, 1)); // the SPU runs from SYSCLK, which is twice the unSP clock
 	m_spg_audio->write_irq_callback().set(FUNC(generalplus_gpl951xx_device::audioirq_w));
-	m_spg_audio->space_read_callback().set(FUNC(generalplus_gpl951xx_device::read_space));
+	m_spg_audio->space_read_callback().set(FUNC(generalplus_gpl951xx_device::audio_space_r));
 	m_spg_audio->add_route(0, *this, 1.0, 0);
 	m_spg_audio->add_route(1, *this, 1.0, 1);
 

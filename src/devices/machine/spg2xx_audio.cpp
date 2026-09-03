@@ -733,7 +733,7 @@ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
 	{
 	case AUDIO_PHASE_HIGH:
 		m_audio_phase_regs[offset] = data & AUDIO_PHASE_HIGH_MASK;
-		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "audio_phase_w: Channel %d: Phase High: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		break;
@@ -755,7 +755,7 @@ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
 
 	case AUDIO_PHASE:
 		m_audio_phase_regs[offset] = data;
-		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "audio_phase_w: Channel %d: Phase: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		break;
@@ -1081,33 +1081,20 @@ uint16_t spg2xx_audio_device::read_space(offs_t offset)
 
 uint16_t spg2xx_audio_device::decode_adpcm36_nybble(const uint32_t channel, const uint8_t data)
 {
-	/*static const int8_t s_filter_coef[16][2] =
+	static const int16_t s_filter_coef[4][2] =
 	{
-	    { 0, 0 },
-	    { 60, 0 },
-	    { 115,-52 },
-	    { 98,-55 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 0, 0 },
-	    { 60, 0 },
-	    { 115,-52 },
-	    { 98,-55 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	};*/
+		{ 0, 0 },
+		{ 60, 0 },
+		{ 115,-52 },
+		{ 98,-55 },
+	};
 
 	adpcm36_state &state = m_adpcm36_state[channel];
 	int32_t shift = state.m_header & 0xf;
-	int16_t filter = (state.m_header & 0x3f0) >> 4;
-	int16_t f0 = filter | ((filter & 0x20) ? ~0x3f : 0); // sign extend
-	int32_t f1 = 0;
+	int16_t f0 = s_filter_coef[(state.m_header >> 5) & 3][0];
+	int32_t f1 = s_filter_coef[(state.m_header >> 5) & 3][1];
 	int16_t sdata = data << 12;
-	sdata = (sdata >> shift) + (((state.m_prevsamp[0] * f0) + (state.m_prevsamp[1] * f1) + 32) >> 12);
+	sdata = (sdata >> shift) + (((state.m_prevsamp[0] * f0) + (state.m_prevsamp[1] * f1) + 32) >> 6);
 	state.m_prevsamp[1] = state.m_prevsamp[0];
 	state.m_prevsamp[0] = sdata;
 	return (uint16_t)sdata ^ 0x8000;
@@ -1123,9 +1110,15 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 
 	if (get_adpcm36_bit(channel) && tone_mode != 0 && m_adpcm36_state[channel].m_remaining == 0)
 	{
-		m_adpcm36_state[channel].m_header = read_space(get_wave_addr(channel));
-		m_adpcm36_state[channel].m_remaining = 8;
-		inc_wave_addr(channel);
+		const uint16_t header = read_space(get_wave_addr(channel));
+		if (header != 0xffff)
+		{
+			m_adpcm36_state[channel].m_header = header;
+			m_adpcm36_state[channel].m_remaining = 8;
+			inc_wave_addr(channel);
+		}
+		// a sample ending on a frame boundary puts the end marker where the
+		// next header would be; leave it to be picked up as the end of data
 	}
 
 	uint16_t raw_sample = tone_mode ? read_space(get_wave_addr(channel)) : m_audio_regs[wave_data_reg];
@@ -1455,7 +1448,7 @@ void spg110_audio_device::audio_w(offs_t offset, uint16_t data)
 	{
 	case 0x0e:
 		m_audio_regs[offset] = data;
-		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "spg110_audio_device::audio_w: Channel %d: Phase: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		return;
@@ -1467,15 +1460,27 @@ void spg110_audio_device::audio_w(offs_t offset, uint16_t data)
 uint16_t sunplus_gcm394_audio_device::control_group16_r(uint8_t group, uint8_t offset)
 {
 	LOGMASKED(LOG_SPU_WRITES, "sunplus_gcm394_audio_device::control_group16_r (group %d) offset %02x\n", group, offset);
+
+	// the first group has the same layout as the spg2xx audio control block
+	// (channel enable, main volume, envelope clocks, channel stop etc.) so
+	// let the underlying implementation service it
+	if (group == 0)
+		return audio_ctrl_r(offset);
+
 	return m_control[group][offset];
 }
 
 void sunplus_gcm394_audio_device::control_group16_w(uint8_t group, uint8_t offset, uint16_t data)
 {
 	LOGMASKED(LOG_SPU_WRITES, "sunplus_gcm394_audio_device::control_group16_w (group %d) offset %02x data %04x\n", group, offset, data);
-	m_control[group][offset] = data;
 
-	// offset 0x0b = triggers?
+	if (group == 0)
+	{
+		audio_ctrl_w(offset, data);
+		return;
+	}
+
+	m_control[group][offset] = data;
 }
 
 uint16_t sunplus_gcm394_audio_device::control_r(offs_t offset)
