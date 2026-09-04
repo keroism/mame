@@ -348,10 +348,6 @@ protected:
 	virtual void device_reset() override ATTR_COLD;
 	virtual void device_stop() override ATTR_COLD;
 
-	// the rate the channel phase accumulators are clocked at, from which
-	// the channel sample rates derive
-	virtual double sample_clock() const { return 281250.0; }
-
 	uint16_t read_space(offs_t offset);
 
 	void start_channel(const uint32_t channel);
@@ -417,12 +413,6 @@ public:
 	void control_w(offs_t offset, uint16_t data);
 
 	virtual void device_start() override ATTR_COLD;
-
-	// the phase accumulators are clocked at 2^19 Hz (the 32768Hz crystal
-	// multiplied up by 16) so the phase register simply gives the sample rate
-	// in Hz; verified against a recording of the GPL951xx based punirune,
-	// whose date entry tone plays at 770Hz from a 20542Hz sample
-	virtual double sample_clock() const override { return 524288.0; }
 
 private:
 	uint16_t control_group16_r(uint8_t group, uint8_t offset);

@@ -736,7 +736,7 @@ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
 	{
 	case AUDIO_PHASE_HIGH:
 		m_audio_phase_regs[offset] = data & AUDIO_PHASE_HIGH_MASK;
-		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "audio_phase_w: Channel %d: Phase High: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		break;
@@ -758,7 +758,7 @@ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
 
 	case AUDIO_PHASE:
 		m_audio_phase_regs[offset] = data;
-		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "audio_phase_w: Channel %d: Phase: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		break;
@@ -1498,7 +1498,7 @@ void spg110_audio_device::audio_w(offs_t offset, uint16_t data)
 	{
 	case 0x0e:
 		m_audio_regs[offset] = data;
-		m_channel_rate[channel] = ((double)get_phase(channel) * sample_clock()) / (double)(1 << 19);
+		m_channel_rate[channel] = ((double)get_phase(channel) * 140625.0 * 2.0) / (double)(1 << 19);
 		m_channel_rate_accum[channel] = 0.0;
 		LOGMASKED(LOG_CHANNEL_WRITES, "spg110_audio_device::audio_w: Channel %d: Phase: %04x (rate: %f)\n", channel, data, m_channel_rate[channel]);
 		return;
