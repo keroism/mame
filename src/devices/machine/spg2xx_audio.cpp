@@ -101,7 +101,10 @@ void spg2xx_audio_device::device_start()
 	{
 		save_item(NAME(m_adpcm[i].m_signal), i);
 		save_item(NAME(m_adpcm[i].m_step), i);
+		save_item(NAME(m_adpcm36_state[i].m_remaining), i);
+		save_item(NAME(m_adpcm36_state[i].m_points), i);
 		save_item(NAME(m_adpcm36_state[i].m_header), i);
+		save_item(NAME(m_adpcm36_state[i].m_final), i);
 		save_item(NAME(m_adpcm36_state[i].m_prevsamp), i);
 
 		memset(m_adpcm36_state + i, 0, sizeof(adpcm36_state));
@@ -1044,14 +1047,27 @@ bool spg2xx_audio_device::advance_channel(const uint32_t channel)
 		{
 			// ADPCM mode
 			m_sample_shift[channel] += 4;
-			if (m_sample_shift[channel] >= 16)
+			if (get_adpcm36_bit(channel) && m_adpcm36_state[channel].m_remaining != 0)
+			{
+				adpcm36_state &state = m_adpcm36_state[channel];
+				state.m_points--;
+				if (m_sample_shift[channel] >= 16 || state.m_points == 0)
+				{
+					m_sample_shift[channel] = 0;
+					inc_wave_addr(channel);
+					state.m_remaining--;
+				}
+				// a frame holding fewer than 32 points is padded to 8 words
+				while (state.m_points == 0 && state.m_remaining > 0)
+				{
+					inc_wave_addr(channel);
+					state.m_remaining--;
+				}
+			}
+			else if (m_sample_shift[channel] >= 16)
 			{
 				m_sample_shift[channel] = 0;
 				inc_wave_addr(channel);
-				if (get_adpcm36_bit(channel))
-				{
-					m_adpcm36_state[channel].m_remaining--;
-				}
 			}
 		}
 		else if (get_16bit_bit(channel))
@@ -1081,33 +1097,30 @@ uint16_t spg2xx_audio_device::read_space(offs_t offset)
 
 uint16_t spg2xx_audio_device::decode_adpcm36_nybble(const uint32_t channel, const uint8_t data)
 {
-	/*static const int8_t s_filter_coef[16][2] =
+	// Predictor coefficients in 1/64 units, taken from the GeneralPlus A3600
+	// reference decoder (A3600.dll a3600_dec_frame), which this matches
+	// sample for sample. The header selects one with its bits 8:4, the low
+	// four bits give the shift applied to the residual.
+	static const int32_t s_filter_coef[32][2] =
 	{
-	    { 0, 0 },
-	    { 60, 0 },
-	    { 115,-52 },
-	    { 98,-55 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 0, 0 },
-	    { 60, 0 },
-	    { 115,-52 },
-	    { 98,-55 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	    { 122,-60 },
-	};*/
+		{   0,   0 }, {  60,   0 }, { 115, -52 }, {  98, -55 },
+		{ 122, -60 }, { 127, -64 }, {  64,   0 }, { -64,   0 },
+		{ -75, -36 }, {  63,  -6 }, {   6,  19 }, {  54, -12 },
+		{ -24, -32 }, {  73, -21 }, { -42, -15 }, {  65,  -3 },
+		{  23,  -7 }, {  75, -14 }, {  10, -30 }, {  85, -34 },
+		{  65, -33 }, {  97, -47 }, {  -9, -12 }, {  86, -26 },
+		{  39,  15 }, {  79, -47 }, {  41, -27 }, {  98, -38 },
+		{  38, -50 }, { 111, -52 }, {   0,   0 }, {   0,   0 },
+	};
+
+	// each product is scaled back separately, truncating towards zero
+	auto scale = [] (int32_t v) { return (v < 0) ? -((-v) >> 6) : (v >> 6); };
 
 	adpcm36_state &state = m_adpcm36_state[channel];
-	int32_t shift = state.m_header & 0xf;
-	int16_t filter = (state.m_header & 0x3f0) >> 4;
-	int16_t f0 = filter | ((filter & 0x20) ? ~0x3f : 0); // sign extend
-	int32_t f1 = 0;
-	int16_t sdata = data << 12;
-	sdata = (sdata >> shift) + (((state.m_prevsamp[0] * f0) + (state.m_prevsamp[1] * f1) + 32) >> 12);
+	const int32_t shift = state.m_header & 0xf;
+	const int32_t *const coef = s_filter_coef[(state.m_header >> 4) & 0x1f];
+	const int32_t residual = int16_t(data << 12) >> shift;
+	const int32_t sdata = std::clamp(residual + scale(state.m_prevsamp[0] * coef[0]) + scale(state.m_prevsamp[1] * coef[1]), -32768, 32767);
 	state.m_prevsamp[1] = state.m_prevsamp[0];
 	state.m_prevsamp[0] = sdata;
 	return (uint16_t)sdata ^ 0x8000;
@@ -1121,11 +1134,27 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 	const uint32_t wave_data_reg = channel_mask | AUDIO_WAVE_DATA;
 	const uint16_t tone_mode = get_tone_mode(channel);
 
+	// In ADPCM36 mode the end of the data is signalled by the frame headers,
+	// either by the final frame flag or by an end code where the next header
+	// would be. The words inside a frame are always data, an end code there
+	// is just four points with the maximum negative delta.
+	bool adpcm36_end = false;
 	if (get_adpcm36_bit(channel) && tone_mode != 0 && m_adpcm36_state[channel].m_remaining == 0)
 	{
-		m_adpcm36_state[channel].m_header = read_space(get_wave_addr(channel));
-		m_adpcm36_state[channel].m_remaining = 8;
-		inc_wave_addr(channel);
+		adpcm36_state &state = m_adpcm36_state[channel];
+		const uint16_t header = read_space(get_wave_addr(channel));
+		if (state.m_final || header == 0xffff)
+		{
+			adpcm36_end = true;
+		}
+		else
+		{
+			state.m_header = header;
+			state.m_remaining = 8;
+			state.m_points = ((header >> 9) & 0x1f) + 1;
+			state.m_final = BIT(header, 14);
+			inc_wave_addr(channel);
+		}
 	}
 
 	uint16_t raw_sample = tone_mode ? read_space(get_wave_addr(channel)) : m_audio_regs[wave_data_reg];
@@ -1155,7 +1184,8 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 	if (get_adpcm_bit(channel) || get_adpcm36_bit(channel))
 	{
 		// ADPCM mode
-		if (tone_mode != 0 && raw_sample == 0xffff)
+		const bool end_of_data = get_adpcm36_bit(channel) ? adpcm36_end : (tone_mode != 0 && raw_sample == 0xffff);
+		if (end_of_data)
 		{
 			if (tone_mode == AUDIO_TONE_MODE_HW_ONESHOT)
 			{
@@ -1170,6 +1200,19 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 				LOGMASKED(LOG_SAMPLES, "ADPCM looping after %d samples\n", m_sample_count[channel]);
 				m_sample_count[channel] = 0;
 				loop_channel(channel);
+				if (get_adpcm36_bit(channel) && tone_mode == AUDIO_TONE_MODE_HW_LOOP)
+				{
+					// the loop area holds further ADPCM36 frames
+					memset(m_adpcm36_state + channel, 0, sizeof(adpcm36_state));
+					if (read_space(get_wave_addr(channel)) == 0xffff)
+					{
+						m_audio_ctrl_regs[AUDIO_CHANNEL_STOP] |= (1 << channel);
+						stop_channel(channel);
+						return false;
+					}
+					return fetch_sample(channel);
+				}
+				// otherwise the loop area holds PCM data
 				m_audio_regs[(channel << 4) | AUDIO_MODE] &= ~AUDIO_ADPCM_MASK;
 			}
 		}
@@ -1467,15 +1510,27 @@ void spg110_audio_device::audio_w(offs_t offset, uint16_t data)
 uint16_t sunplus_gcm394_audio_device::control_group16_r(uint8_t group, uint8_t offset)
 {
 	LOGMASKED(LOG_SPU_WRITES, "sunplus_gcm394_audio_device::control_group16_r (group %d) offset %02x\n", group, offset);
+
+	// the first group has the same layout as the spg2xx audio control block
+	// (channel enable, main volume, envelope clocks, channel stop etc.) so
+	// let the underlying implementation service it
+	if (group == 0)
+		return audio_ctrl_r(offset);
+
 	return m_control[group][offset];
 }
 
 void sunplus_gcm394_audio_device::control_group16_w(uint8_t group, uint8_t offset, uint16_t data)
 {
 	LOGMASKED(LOG_SPU_WRITES, "sunplus_gcm394_audio_device::control_group16_w (group %d) offset %02x data %04x\n", group, offset, data);
-	m_control[group][offset] = data;
 
-	// offset 0x0b = triggers?
+	if (group == 0)
+	{
+		audio_ctrl_w(offset, data);
+		return;
+	}
+
+	m_control[group][offset] = data;
 }
 
 uint16_t sunplus_gcm394_audio_device::control_r(offs_t offset)
