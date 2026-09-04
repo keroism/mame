@@ -330,10 +330,15 @@ protected:
 		AUDIO_EQ_GAIN32_MASK            = 0x7f7f
 	};
 
+	// ADPCM36 data is a sequence of 9 word frames, a header followed by 8
+	// words holding up to 32 4-bit points; the header carries the number of
+	// points in the frame and flags the final frame of the sound
 	struct adpcm36_state
 	{
-		uint16_t m_remaining;
+		uint16_t m_remaining; // words left in the current frame
+		uint16_t m_points;    // points left in the current frame
 		uint16_t m_header;
+		bool m_final;         // the current frame is the last one
 		int16_t m_prevsamp[2];
 	};
 

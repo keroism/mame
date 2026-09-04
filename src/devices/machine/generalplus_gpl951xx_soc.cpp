@@ -18,6 +18,7 @@
 #define LOG_SPIFC     (1U << 1)
 #define LOG_TFT       (1U << 2)
 #define LOG_OTHER     (1U << 3)
+#define LOG_ADC       (1U << 4)
 
 #define VERBOSE     (LOG_SPIFC | LOG_OTHER)
 
@@ -1013,7 +1014,7 @@ TIMER_DEVICE_CALLBACK_MEMBER( generalplus_gpl951xx_device::adc_timer_cb )
 
 u16 generalplus_gpl951xx_device::madc_ctrl_r()
 {
-	logerror("%s: madc_ctrl_r\n", machine().describe_context());
+	LOGMASKED(LOG_ADC, "%s: madc_ctrl_r\n", machine().describe_context());
 	return m_madc_ctrl;
 }
 
@@ -1031,7 +1032,7 @@ void generalplus_gpl951xx_device::madc_ctrl_w(u16 data)
 		"LDOV50"
 	};
 
-	logerror("%s: madc_ctrl_w %04x\n", machine().describe_context(), data);
+	LOGMASKED(LOG_ADC, "%s: madc_ctrl_w %04x\n", machine().describe_context(), data);
 
 	if (data & 0x8000)
 	{
@@ -1058,7 +1059,7 @@ void generalplus_gpl951xx_device::madc_ctrl_w(u16 data)
 
 		u8 channel = data & 0x0007;
 
-		logerror("manual ADC conversion on port %s\n", CHANNEL_NAME[channel]);
+		LOGMASKED(LOG_ADC, "manual ADC conversion on port %s\n", CHANNEL_NAME[channel]);
 
 		if (channel < 6)
 		{
@@ -1077,7 +1078,7 @@ void generalplus_gpl951xx_device::madc_ctrl_w(u16 data)
 
 u16 generalplus_gpl951xx_device::madc_data_r()
 {
-	logerror("%s: madc_data_r\n", machine().describe_context());
+	LOGMASKED(LOG_ADC, "%s: madc_data_r\n", machine().describe_context());
 	return m_madc_data;
 }
 

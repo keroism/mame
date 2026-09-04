@@ -101,7 +101,10 @@ void spg2xx_audio_device::device_start()
 	{
 		save_item(NAME(m_adpcm[i].m_signal), i);
 		save_item(NAME(m_adpcm[i].m_step), i);
+		save_item(NAME(m_adpcm36_state[i].m_remaining), i);
+		save_item(NAME(m_adpcm36_state[i].m_points), i);
 		save_item(NAME(m_adpcm36_state[i].m_header), i);
+		save_item(NAME(m_adpcm36_state[i].m_final), i);
 		save_item(NAME(m_adpcm36_state[i].m_prevsamp), i);
 
 		memset(m_adpcm36_state + i, 0, sizeof(adpcm36_state));
@@ -1044,14 +1047,27 @@ bool spg2xx_audio_device::advance_channel(const uint32_t channel)
 		{
 			// ADPCM mode
 			m_sample_shift[channel] += 4;
-			if (m_sample_shift[channel] >= 16)
+			if (get_adpcm36_bit(channel) && m_adpcm36_state[channel].m_remaining != 0)
+			{
+				adpcm36_state &state = m_adpcm36_state[channel];
+				state.m_points--;
+				if (m_sample_shift[channel] >= 16 || state.m_points == 0)
+				{
+					m_sample_shift[channel] = 0;
+					inc_wave_addr(channel);
+					state.m_remaining--;
+				}
+				// a frame holding fewer than 32 points is padded to 8 words
+				while (state.m_points == 0 && state.m_remaining > 0)
+				{
+					inc_wave_addr(channel);
+					state.m_remaining--;
+				}
+			}
+			else if (m_sample_shift[channel] >= 16)
 			{
 				m_sample_shift[channel] = 0;
 				inc_wave_addr(channel);
-				if (get_adpcm36_bit(channel))
-				{
-					m_adpcm36_state[channel].m_remaining--;
-				}
 			}
 		}
 		else if (get_16bit_bit(channel))
@@ -1108,17 +1124,27 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 	const uint32_t wave_data_reg = channel_mask | AUDIO_WAVE_DATA;
 	const uint16_t tone_mode = get_tone_mode(channel);
 
+	// In ADPCM36 mode the end of the data is signalled by the frame headers,
+	// either by the final frame flag or by an end code where the next header
+	// would be. The words inside a frame are always data, an end code there
+	// is just four points with the maximum negative delta.
+	bool adpcm36_end = false;
 	if (get_adpcm36_bit(channel) && tone_mode != 0 && m_adpcm36_state[channel].m_remaining == 0)
 	{
+		adpcm36_state &state = m_adpcm36_state[channel];
 		const uint16_t header = read_space(get_wave_addr(channel));
-		if (header != 0xffff)
+		if (state.m_final || header == 0xffff)
 		{
-			m_adpcm36_state[channel].m_header = header;
-			m_adpcm36_state[channel].m_remaining = 8;
+			adpcm36_end = true;
+		}
+		else
+		{
+			state.m_header = header;
+			state.m_remaining = 8;
+			state.m_points = ((header >> 9) & 0x1f) + 1;
+			state.m_final = BIT(header, 14);
 			inc_wave_addr(channel);
 		}
-		// a sample ending on a frame boundary puts the end marker where the
-		// next header would be; leave it to be picked up as the end of data
 	}
 
 	uint16_t raw_sample = tone_mode ? read_space(get_wave_addr(channel)) : m_audio_regs[wave_data_reg];
@@ -1148,7 +1174,8 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 	if (get_adpcm_bit(channel) || get_adpcm36_bit(channel))
 	{
 		// ADPCM mode
-		if (tone_mode != 0 && raw_sample == 0xffff)
+		const bool end_of_data = get_adpcm36_bit(channel) ? adpcm36_end : (tone_mode != 0 && raw_sample == 0xffff);
+		if (end_of_data)
 		{
 			if (tone_mode == AUDIO_TONE_MODE_HW_ONESHOT)
 			{
@@ -1163,6 +1190,19 @@ bool spg2xx_audio_device::fetch_sample(const uint32_t channel)
 				LOGMASKED(LOG_SAMPLES, "ADPCM looping after %d samples\n", m_sample_count[channel]);
 				m_sample_count[channel] = 0;
 				loop_channel(channel);
+				if (get_adpcm36_bit(channel) && tone_mode == AUDIO_TONE_MODE_HW_LOOP)
+				{
+					// the loop area holds further ADPCM36 frames
+					memset(m_adpcm36_state + channel, 0, sizeof(adpcm36_state));
+					if (read_space(get_wave_addr(channel)) == 0xffff)
+					{
+						m_audio_ctrl_regs[AUDIO_CHANNEL_STOP] |= (1 << channel);
+						stop_channel(channel);
+						return false;
+					}
+					return fetch_sample(channel);
+				}
+				// otherwise the loop area holds PCM data
 				m_audio_regs[(channel << 4) | AUDIO_MODE] &= ~AUDIO_ADPCM_MASK;
 			}
 		}
