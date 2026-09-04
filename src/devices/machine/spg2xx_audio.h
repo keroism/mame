@@ -418,10 +418,11 @@ public:
 
 	virtual void device_start() override ATTR_COLD;
 
-	// the sample circuitry runs at SYSCLK/288 rather than the fixed rate of
-	// the earlier SPG2xx parts (verified against hardware recordings of the
-	// GPL951xx based punitapi)
-	virtual double sample_clock() const override { return clock() / 288.0; }
+	// the phase accumulators are clocked at 2^19 Hz (the 32768Hz crystal
+	// multiplied up by 16) so the phase register simply gives the sample rate
+	// in Hz; verified against a recording of the GPL951xx based punirune,
+	// whose date entry tone plays at 770Hz from a 20542Hz sample
+	virtual double sample_clock() const override { return 524288.0; }
 
 private:
 	uint16_t control_group16_r(uint8_t group, uint8_t offset);

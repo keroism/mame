@@ -1097,20 +1097,30 @@ uint16_t spg2xx_audio_device::read_space(offs_t offset)
 
 uint16_t spg2xx_audio_device::decode_adpcm36_nybble(const uint32_t channel, const uint8_t data)
 {
-	static const int16_t s_filter_coef[4][2] =
+	// Predictor coefficients in 1/64 units, taken from the GeneralPlus A3600
+	// reference decoder (A3600.dll a3600_dec_frame), which this matches
+	// sample for sample. The header selects one with its bits 8:4, the low
+	// four bits give the shift applied to the residual.
+	static const int32_t s_filter_coef[32][2] =
 	{
-		{ 0, 0 },
-		{ 60, 0 },
-		{ 115,-52 },
-		{ 98,-55 },
+		{   0,   0 }, {  60,   0 }, { 115, -52 }, {  98, -55 },
+		{ 122, -60 }, { 127, -64 }, {  64,   0 }, { -64,   0 },
+		{ -75, -36 }, {  63,  -6 }, {   6,  19 }, {  54, -12 },
+		{ -24, -32 }, {  73, -21 }, { -42, -15 }, {  65,  -3 },
+		{  23,  -7 }, {  75, -14 }, {  10, -30 }, {  85, -34 },
+		{  65, -33 }, {  97, -47 }, {  -9, -12 }, {  86, -26 },
+		{  39,  15 }, {  79, -47 }, {  41, -27 }, {  98, -38 },
+		{  38, -50 }, { 111, -52 }, {   0,   0 }, {   0,   0 },
 	};
 
+	// each product is scaled back separately, truncating towards zero
+	auto scale = [] (int32_t v) { return (v < 0) ? -((-v) >> 6) : (v >> 6); };
+
 	adpcm36_state &state = m_adpcm36_state[channel];
-	int32_t shift = state.m_header & 0xf;
-	int16_t f0 = s_filter_coef[(state.m_header >> 5) & 3][0];
-	int32_t f1 = s_filter_coef[(state.m_header >> 5) & 3][1];
-	int16_t sdata = data << 12;
-	sdata = (sdata >> shift) + (((state.m_prevsamp[0] * f0) + (state.m_prevsamp[1] * f1) + 32) >> 6);
+	const int32_t shift = state.m_header & 0xf;
+	const int32_t *const coef = s_filter_coef[(state.m_header >> 4) & 0x1f];
+	const int32_t residual = int16_t(data << 12) >> shift;
+	const int32_t sdata = std::clamp(residual + scale(state.m_prevsamp[0] * coef[0]) + scale(state.m_prevsamp[1] * coef[1]), -32768, 32767);
 	state.m_prevsamp[1] = state.m_prevsamp[0];
 	state.m_prevsamp[0] = sdata;
 	return (uint16_t)sdata ^ 0x8000;
